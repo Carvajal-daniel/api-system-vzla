@@ -1,0 +1,126 @@
+---
+description: Essential stack, architecture, security, and implementation conventions for this project.
+alwaysApply: true
+---
+
+# Project Conventions
+
+## Project and Stack
+
+This repository is the backend API for a SaaS platform serving barbershops and beauty salons. It supports businesses, collaborators, services, appointments, scheduling, and planned automation capabilities.
+
+The established stack is:
+
+- Node.js
+- TypeScript
+- Fastify
+- PostgreSQL
+- Drizzle ORM
+- Zod
+- bcrypt for the current password-hashing implementation
+
+Do not replace these technologies or introduce alternative frameworks, ORMs, or validation libraries without explicit approval. Before adding a dependency, explain why it is needed and check whether the current stack already provides the required functionality.
+
+## Current Structure and Modules
+
+- Always inspect the repository before stating which modules exist; do not infer module existence from plans, requests, or prior context.
+- Use `development-partner.mdc` to identify the architecture from the implementation. Do not infer it from this stack or framework.
+- This repository has areas using folders such as `domain/`, `application/`, and `infra/`. Treat them as observed conventions, not required layers; follow the target area and do not impose these names on a different architecture or hybrid area.
+- In areas that already use `application/`, keep application operations there. Do not create a parallel `usecases/` directory or another layer without a concrete need.
+- Do not rename directories, move files, or reorganize modules without approval. Propose structural changes first and explain their impact.
+- Do not create empty modules, speculative abstractions, or extra layers for hypothetical future requirements.
+
+## Architecture-Neutral Design
+
+- Follow the responsibilities and dependency patterns actually used in the target area. Keep components focused and avoid introducing boundaries, layers, ports, adapters, or abstractions only to match a named architecture.
+- Apply architecture-specific guidance only when the repository analysis identifies that architecture and the guidance fits the relevant area. For Hexagonal Architecture, use `hexagonal-architecture.mdc` only under its stated conditions.
+- In hybrid projects, preserve the established pattern for each area instead of forcing one structure across the repository.
+
+## Dependencies and Composition
+
+- Follow the project's established dependency and composition patterns. Make dependencies visible at meaningful boundaries; use constructor injection when it fits an existing pattern or solves a concrete need, not as a mandatory form.
+- Place dependency composition where the identified architecture and existing project patterns expect it.
+- Avoid introducing hidden global dependencies without a concrete need. Existing shared singletons, including the database connection used by current repositories, are part of the observed implementation; do not require their removal or refactor them automatically.
+- Do not add a dependency injection framework, interfaces, factories, services, or other abstractions without a demonstrated need.
+
+## Database and Persistence
+
+- PostgreSQL is the primary database and Drizzle ORM is the established persistence tool.
+- Keep Drizzle schemas, SQL, database connections, and persistence details in the existing persistence area; do not create an `infra/` layer solely to satisfy a folder convention.
+- Map database records according to the identified architecture. Do not expose Drizzle-specific types across boundaries that the project actually maintains.
+- Use migrations for schema changes. Keep migrations versioned and consistent with the schema. Before modifying or removing a migration, analyze its history and dependencies.
+- Use constraints for important data invariants, transactions for operations requiring atomicity, and indexes based on query patterns.
+- Use parameterized database operations; avoid unsafe SQL construction and unnecessary queries.
+- Scope tenant-specific data access to the authorized tenant where applicable.
+
+## Validation and Data Integrity
+
+- Use Zod to validate untrusted input at external boundaries, especially HTTP requests. Use parsed data rather than the original unvalidated input.
+- Keep business invariants protected by the responsible component in the identified architecture. Input validation is not a substitute for enforcing business rules.
+- Avoid conflicting duplicate validation. Reuse the existing business logic where available and keep boundary validation aligned with it.
+- Normalize values consistently before persistence when required by the domain, such as email addresses, phone numbers, and names.
+- Handle passwords according to the explicit policy and existing behavior. Do not introduce normalization that changes the value chosen by the user. Before changing an existing password flow, inspect its behavior, including any normalization, and obtain approval for a behavior change rather than modifying it silently.
+- Validate required environment variables and configuration at application startup.
+
+## Security and Multi-Tenancy
+
+- Never store plaintext passwords or use plain SHA-256 as a password-hashing strategy. Use a dedicated password-hashing abstraction and an appropriate algorithm; the current project uses bcrypt.
+- Never expose password hashes, credentials, tokens, secrets, or private keys in API responses or logs.
+- Never hardcode secrets. Obtain them through protected configuration and secret-management mechanisms appropriate to the runtime environment, such as securely injected environment configuration or a managed secret store.
+- Restrict access to secrets according to runtime identity and least privilege. Avoid exposing secrets in logs, error messages, build artifacts, or client-visible configuration.
+- Apply authentication and authorization to operations already defined as protected. Do not treat a client-supplied user or company identifier as proof of identity or access. Do not assume tenant isolation is fully implemented; inspect the existing authentication and tenant flows.
+- Apply rate limiting where appropriate and avoid insecure direct object references.
+- The platform is intended to support multiple businesses. For tenant-scoped operations, derive tenant context from trusted authentication and authorization, verify access, and scope every relevant data operation to that authorized tenant.
+- If the task appears to require a new authentication, authorization, or tenant-isolation mechanism, or the access policy is undefined, explain the uncertainty and follow the approval process in `development-partner.mdc` before implementing it. Identifying this need does not expand the approved scope.
+
+## Errors and Logging
+
+- Keep business errors independent of HTTP where the architecture separates those concerns. Translate errors at the existing HTTP boundary or centralized handler when present. Never send raw exceptions, `Error` objects, stack traces, or technical details in API responses; return a safe public message and log useful details only on the server without secrets.
+- Do not silently swallow errors or duplicate response translation across controllers.
+- Use structured logging where appropriate and never log passwords, tokens, secrets, or other sensitive data.
+
+## TypeScript, Naming, and Code Quality
+
+- Use TypeScript types deliberately. Avoid `any`; prefer `unknown` for values of uncertain type and validate them before use. Avoid unnecessary assertions.
+- Use clear names and follow the conventions already present in the affected module. Existing naming conventions take precedence over generic defaults.
+- Keep functions and classes focused on coherent responsibilities. Prefer simple, readable solutions and remove duplication when it represents the same business rule or knowledge.
+- Use design principles and patterns only when they solve a concrete problem in the identified architecture; do not add abstractions solely to satisfy a principle or pattern.
+- Avoid magic numbers, unrelated refactoring, and unnecessary complexity.
+
+## Testing and Performance
+
+- Keep important behavior testable without requiring unrelated infrastructure where practical.
+- Prioritize checks for business behavior, operation or controller/service logic, persistence and external integrations, and authorization or tenant isolation as applicable to the identified architecture.
+- Use dependency injection or another existing isolation technique to separate tests from PostgreSQL and external services where appropriate.
+- Follow the existing test configuration; do not add a test framework without checking the project setup.
+- Test important invariants and success/failure scenarios. Do not claim tests were run unless they were executed.
+- Consider query patterns, pagination for large collections, indexes, external calls, and reuse of configured connections/clients.
+- Add caching only for a clear use case and avoid premature optimization.
+
+## Implementation Workflow
+
+Before changing code, inspect the relevant module, its structure, existing contracts and implementations, and affected module boundaries. Identify the correct responsibility and the smallest appropriate implementation.
+
+During implementation:
+
+- Follow existing conventions.
+- Modify only files necessary for the task.
+- Preserve existing behavior unless a change is requested.
+- Avoid unrelated refactoring.
+- Do not introduce new dependencies without approval.
+
+After implementation, keep the final response brief and user-focused. Use these sections:
+
+**O que foi feito:** Summarize the changes briefly.
+
+**Como funciona:** Explain in plain language what the owner or user can do after this implementation. Clearly distinguish implemented behavior from planned behavior. Give a practical example only when it helps; do not force one.
+
+**Verificação:** State what was actually checked and the results. Do not claim behavior works unless it was implemented and verified.
+
+**Pendências:** State only work that remains incomplete, or say there are none. Distinguish implementation, integration, and testing.
+
+**Próximo passo recomendado:** Recommend one useful next step based on the repository's actual state, or say that none is needed. Follow `development-partner.mdc` for how to choose and explain it.
+
+Avoid long technical reports and extensive lists of files, classes, methods, or internal details unless the user asks for them. Explain technical terms only when needed. Do not claim checks passed unless they were run.
+
+The developer owns architectural and business decisions. Do not independently change the architectural approach, technology stack, business rules, or project organization, or make irreversible database changes. When a material decision is undefined, explain the alternatives and ask the developer.

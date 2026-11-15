@@ -5,7 +5,6 @@ import { db } from "../../../../../shared/database/database.js";
 import { CompanyTable } from "../schema/companies-schema.js";
 import type { CompanyEntity } from "../../../domain/entities/company.entity.js";
 import type { CompaniesRepository } from "../../../domain/repository/companies.repository.interface.js";
-import type { CompanyEmail } from "../../../domain/value-objects/email.vo.js";
 
 export class CompanyRepositoryDB implements CompaniesRepository {
   
@@ -25,12 +24,12 @@ export class CompanyRepositoryDB implements CompaniesRepository {
       });
   }
 
-  async existsByEmail(email: CompanyEmail): Promise<boolean> {
+  async existsByEmail(email: string): Promise<boolean> {
 
     const result = await db
       .select({ id: CompanyTable.id })
       .from(CompanyTable)
-      .where(eq(CompanyTable.email, email.value))
+      .where(eq(CompanyTable.email, email))
       .limit(1);
 
     return result.length > 0;

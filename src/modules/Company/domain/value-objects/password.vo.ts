@@ -1,4 +1,4 @@
-import { InvalidPasswordError } from "../Errors/invalid-password.js";
+import { InvalidPasswordError } from "../../../../shared/Errors/invalid-password.js";
 
 
 export class Password {

@@ -1,0 +1,66 @@
+---
+description: Use when planning or implementing a complete module or substantial feature in an existing project.
+alwaysApply: false
+---
+
+# Module Implementation
+
+Use this workflow when asked to create or implement a complete module or substantial feature boundary in an existing project.
+
+## 1. Inspect the Project
+
+- Read project instructions and inspect the relevant architecture, module structure, naming conventions, and implementation patterns.
+- Follow the architecture-identification process in `development-partner.mdc`; for hybrid projects, inspect the area this module will touch.
+- Identify existing modules, shared capabilities, contracts, persistence mechanisms, delivery and integration code, and tests that may be affected.
+- Use the current repository and latest approved requirements as the source of truth. Do not impose a layout from this workflow; if the developer says an implementation was removed and must be rebuilt, do not recover or reuse its old files.
+- Creating a module in an existing project does not trigger project initialization or project restructuring. Do not run `project-initialization.mdc` or reorganize the project for this task. Work within the established architecture and structure; propose any necessary structural change separately and wait for its approval.
+- If the project is genuinely new or nearly empty and the request includes establishing its initial project structure, use `project-initialization.mdc` first. A module request in an established project is not, by itself, a reason to do so.
+
+## 2. Understand the Module Requirements
+
+Identify the module's purpose, actors, inputs, outputs, business rules, invariants, access boundaries, failure cases, and relationships with other modules.
+
+Separate confirmed requirements from assumptions. Ask about a decision that would materially affect business behavior, data ownership, security, or module boundaries.
+
+## 3. Plan the Module
+
+Present a plan before implementation. Include only responsibilities that the requirements need:
+
+- **Module boundary:** purpose, ownership, business language, public contract, and interactions with other modules.
+- **Responsibilities and data model:** identify the business concepts, operations, inputs, outputs, invariants, and components actually needed. Place them according to the observed architecture; do not require Domain, Application, controller, service, or other layers by default.
+- **Integrations and boundaries:** identify persistence, delivery, and external capabilities involved. Propose contracts or separations only when they fit the existing architecture and solve a concrete need.
+- **Persistence and database integration:** owned data, mappings, schema changes, constraints, indexes, and migrations, where applicable. Include repository contracts and implementations only when the project uses or needs them.
+- **Validation and delivery:** boundary validation, controllers, routes, or equivalent interfaces, when applicable. Follow the project's existing delivery pattern.
+- **Security and authorization:** identity, access checks, tenant or ownership boundaries, and sensitive data, where relevant.
+- **Tests:** important behavior, interfaces, integrations, authorization, and failure paths that apply to the selected architecture.
+- **Files and sequence:** files to create or modify, their responsibilities, implementation order, and dependencies between steps.
+- **Verification:** relevant project checks and how results will be reported.
+- **Risks and open decisions:** assumptions, cross-module effects, and choices requiring developer input.
+
+The listed concerns are planning prompts, not required artifacts. Use the project's existing structure and add only the components needed by the requirements.
+
+Apply `hexagonal-architecture.mdc` only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the evidence criteria in `development-partner.mdc`. Use other architecture-specific guidance only when it matches the architecture actually present. Treat DDD and other design concepts as optional, not as required artifacts. Keep technology-specific choices consistent with project conventions; do not restate them as universal rules.
+
+Before presenting the plan, review it as a complete path from entry point through the actual execution flow and relevant integrations to the user-visible result. Check that affected existing behavior, migrations, verification, scope exclusions, and unresolved product decisions are accounted for, and remove speculative work.
+
+## 4. Wait for Approval
+
+Show the plan and wait for explicit approval before creating or modifying implementation files.
+
+Planning alone is not implementation approval. Treat explicit approval of the same concrete plan and scope as authorization; do not ask for it again. If implementation requires a material architectural, business, data, security, dependency, or scope change, explain the impact and obtain approval for that change.
+
+## 5. Implement the Approved Plan
+
+- Implement the approved responsibilities in the project's existing structure and conventions.
+- Place each responsibility in the component provided by the existing architecture; keep technical details within its established delivery, persistence, or integration code.
+- Use existing shared capabilities and contracts where appropriate.
+- Avoid duplicate abstractions, speculative functionality, unrelated refactoring, or changes to other modules beyond the approved scope.
+- Preserve existing behavior unless a change is part of the approved requirements.
+- Do not add dependencies or make irreversible data changes outside the approved plan.
+
+## 6. Verify and Report
+
+- Review the resulting module against the approved plan and project dependency boundaries.
+- Run relevant available checks and tests for the changed behavior.
+- Report files created or changed, implemented behavior, checks executed and their actual results, and any planned work left incomplete.
+- Do not claim a check passed unless it was run.

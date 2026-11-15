@@ -1,12 +1,12 @@
-import { NameVO } from '../../../shared/value-objects/name.value-object.js';
+import { NameVO } from '../domain/value-objects/name.value-object.js';
 import { CompanyEntity, type CompanyProps } from '../domain/entities/company.entity.js';
 import type { CompaniesRepository } from '../domain/repository/companies.repository.interface.js';
-import { CompanyEmail } from '../domain/value-objects/email.vo.js';
-import { Password } from '../../../shared/value-objects/password.vo.js';
+import { CompanyEmail } from '../domain/value-objects/company-email.vo.js';
+import { Password } from '../domain/value-objects/password.vo.js';
 import { CompanyEmailAlreadyInError } from '../domain/errors/email-already-exyst.js';
 import type { RegisterCompanyInputDTO, RegisterCompanyOutputDTO } from './company-dto.js';
-import type { PasswordHasher } from './ports/password-hasher.js';
-import * as crypto from 'crypto';
+import type { PasswordHasher } from '../../../shared/cryptography/password-hasher.js';
+
 
 export class RegisterCompanyUseCase {
   constructor(
@@ -16,33 +16,25 @@ export class RegisterCompanyUseCase {
 
   async execute(data: RegisterCompanyInputDTO): Promise<RegisterCompanyOutputDTO> {
     
-    const companyNameVO = NameVO.create(data.companyName);
-    const nomeVO = NameVO.create(data.name);
-    const emailVO = CompanyEmail.create(data.email);
+
     const passwordVO = Password.create(data.password);
+    const passwordHash = await this.passwordHasher.hash(passwordVO.value);
 
-   
-    const companyProps: CompanyProps = {
-      id: crypto.randomUUID(),
-      companyName: companyNameVO,
-      name: nomeVO,
+
+    const company = CompanyEntity.create({
+      companyName: data.companyName,
+      name: data.name,
       phone: data.phone,
-      email: emailVO,
-      password: passwordVO,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+      email: data.email,
+      password: passwordHash,
+    });
 
-    const company = CompanyEntity.create(companyProps);
 
-    // 3. Regra de negócio: Checa se o e-mail já existe
-    const emailExists = await this.companiesRepository.existsByEmail(emailVO);
+    const emailExists = await this.companiesRepository.existsByEmail(data.email);
     if (emailExists) {
       throw new CompanyEmailAlreadyInError();
     }
 
-    const passwordHash = await this.passwordHasher.hash(passwordVO.value);
 
     await this.companiesRepository.save(company, passwordHash);
 

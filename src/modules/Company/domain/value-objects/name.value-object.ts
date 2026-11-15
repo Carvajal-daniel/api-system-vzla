@@ -1,4 +1,4 @@
-import { InvalidNameError } from "../Errors/invalid-name.js";
+import { InvalidNameError } from "../../../../shared/Errors/invalid-name.js";
 
 
 export class NameVO {

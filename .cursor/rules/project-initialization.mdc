@@ -1,0 +1,74 @@
+---
+description: Use when planning the initial setup or structure of a new or nearly empty project.
+alwaysApply: false
+---
+
+# Project Initialization
+
+Use this workflow when asked to initialize a new project or establish its initial working structure. It also applies when the repository contains little more than a package manifest or an equivalent project file.
+
+## 1. Inspect the Current State
+
+- Inspect the repository before proposing changes, including source files, manifests, configuration, documentation, version-control state, and established instructions.
+- Read existing agent rules and instructions. Separate reusable guidance from project-specific conventions, and identify only real gaps, conflicts, or duplication.
+- Distinguish existing decisions and artifacts from missing or uncertain ones.
+- Do not assume the project is empty because source directories are absent.
+
+## 2. Understand the Project
+
+Clarify the goal, intended users, main capabilities, constraints, and expected first milestone. Identify requirements that affect architecture, deployment, security, data, integrations, or operations.
+
+If a critical requirement is unknown, state the assumption or ask a focused question before relying on it in the plan.
+
+## 3. Analyze the Chosen Stack
+
+- Identify the languages, runtimes, frameworks, databases, tooling, and deployment targets already selected or present in the repository.
+- Explain how the selected technologies affect the proposed setup.
+- If a required choice is missing, present suitable options with their tradeoffs instead of silently choosing one.
+- Propose dependencies and configuration only when they serve an identified requirement. Explain the purpose of each proposed dependency and check for existing equivalents.
+- Do not install dependencies, replace tools, or introduce technologies before approval.
+
+If project rules are absent or incomplete, include a concise proposal for project-specific rules based on the technologies and conventions actually found. Reuse or adapt existing rule files where possible; do not duplicate universal guidance or document assumptions as established decisions.
+
+## 4. Plan the Architecture and Structure
+
+- Identify the project's domains, major capabilities, modules, external actors, and integrations.
+- If code already exists, follow the architecture-identification process in `development-partner.mdc` and preserve the patterns found in each relevant area.
+- If no architecture is established, recommend a simple approach that fits the requirements and explain its impact. Do not restructure existing code or treat Hexagonal Architecture as the default.
+- Apply `hexagonal-architecture.mdc` only when Hexagonal Architecture is explicitly selected or identified, or when the relevant hybrid area meets the evidence criteria in `development-partner.mdc`. Do not restate or redefine those principles here.
+- Treat DDD, SOLID, Clean Architecture, and design patterns as options for solving identified problems, not required project features or artifacts.
+- Respect existing architectural decisions and project conventions. If they conflict with the proposed plan or are insufficient, explain the issue and request a decision before proceeding.
+- Propose a directory structure suited to the project. Directory names and layer layouts are choices to justify, not universal requirements.
+- Identify initial files and configuration needed, with each item's responsibility and reason.
+
+## 5. Present the Plan and Wait
+
+Before creating or changing project files, present a reviewable plan containing:
+
+- The understood goal, requirements, constraints, and assumptions.
+- The identified stack and any unresolved choices.
+- The proposed architecture, domains, modules, and directory structure.
+- Dependencies and configuration to add, with reasons.
+- Project-specific rules to create or adapt, only if the inspected repository has a meaningful gap.
+- Initial files to create or modify and their responsibilities.
+- The implementation sequence and verification steps.
+- Meaningful risks or decisions requiring the developer.
+
+Wait for explicit approval before implementing the initialization. A request to analyze or plan is not approval to create files.
+
+## 6. Initialize After Approval
+
+- Implement only the approved plan.
+- Preserve existing files and behavior unless their changes were approved.
+- If implementation reveals a material decision or scope change, stop and present the revised plan for approval.
+- Keep the initial structure as small as practical; do not add speculative modules, dependencies, layers, or abstractions.
+
+## 7. Verify and Report
+
+After initialization:
+
+- Compare the resulting files and structure with the approved plan.
+- Check that required configuration and entry points exist and are internally consistent.
+- Run relevant available setup, formatting, type, build, or test checks when appropriate.
+- Report what was created or changed, what was verified, the actual results, and remaining work.
+- Do not claim a check passed unless it was run.

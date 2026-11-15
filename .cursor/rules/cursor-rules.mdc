@@ -1,80 +1,77 @@
-
 ---
-description: Guidelines for creating, organizing, and maintaining Cursor rules in this project.
-globs:
-alwaysApply: true
+description: Guidelines for creating, scoping, and maintaining Cursor rules in this project.
+globs: .cursor/rules/**/*.mdc
+alwaysApply: false
 ---
 
 # Cursor Rules Organization
 
-## 1. Location
+## 1. Location and Naming
 
-All Cursor rule files must be placed inside:
+All Cursor project rule files must be placed inside:
 
 `.cursor/rules/`
 
-Example:
+Use descriptive kebab-case names and the `.mdc` extension.
+
+Current rules:
 
 ```text
 .cursor/
-└── rules/
-    ├── cursor-rules.mdc
-    ├── continuous-improvement.mdc
-    └── architecture.mdc
+  rules/
+    cursor-rules.mdc
+    development-partner.mdc
+    hexagonal-architecture.mdc
+    project-conventions.mdc
+    continuous-improvement.mdc
+    project-initialization.mdc
+    module-implementation.mdc
 ```
 
-## 2. Naming Convention
+Avoid duplicated or overlapping rules. Keep universal principles, project-specific conventions, and task workflows distinct.
 
-- Use descriptive names.
-- Use kebab-case.
-- Always use the `.mdc` extension.
-- Avoid duplicated or overlapping rules.
+## 2. Rule Scope and Metadata
 
-## 3. Rule File Structure
+Choose rule metadata based on when the instructions are needed:
 
-Every rule must follow this format:
+- Use `alwaysApply: true` only for essential project instructions that must be present in every task.
+- Use `globs` when instructions should be attached automatically for matching files.
+- Omit `globs` for guidance that should be selected by the Agent when relevant. Give such rules a clear and specific `description`.
+- Do not use a broad glob or global application merely to make a rule more likely to be selected.
 
-```markdown
+Example of a scoped rule:
+
+```yaml
 ---
-description: Short description of the rule.
-globs: optional/file/pattern/**
+description: Instructions for files in a specific project area.
+globs: path/to/area/**
 alwaysApply: false
 ---
-
-# Rule Title
-
-Detailed instructions.
 ```
 
-## 4. Before Creating a Rule
+Example of a rule available to the Agent by relevance:
 
-Before creating a new rule:
+```yaml
+---
+description: Use when reviewing or changing the project's architecture.
+alwaysApply: false
+---
+```
 
-1. Check the existing rules.
-2. Identify whether an existing rule already covers the subject.
-3. Prefer updating an existing rule over creating duplicates.
-4. Keep rules specific, objective, and actionable.
-5. Include examples when they clarify the expected implementation.
+## 3. Before Creating or Changing a Rule
 
-## 5. Project-Specific Requirements
+Before creating or changing a rule:
 
-- Rules must reflect the actual technologies and architecture used by this project.
-- Do not introduce libraries, frameworks, or architectural patterns without approval.
-- Do not use examples from technologies that are not part of the project.
-- Keep examples consistent with the current codebase.
+1. Read the existing rules and identify overlap or conflict.
+2. Decide whether an existing rule should be updated instead of adding another.
+3. Keep the rule specific, actionable, and appropriately scoped.
+4. Use examples only when they clarify expected behavior.
+5. Keep technology-specific examples in project-specific rules. Universal rules must not depend on a particular stack.
 
-## 6. User Approval
+## 4. Project Decisions and Approval
 
-The developer is responsible for architectural decisions.
+Rules must reflect approved project decisions and must not silently introduce a new architecture, technology, or convention.
 
-The AI must not independently:
+The developer owns architectural decisions. Follow the approval process in `continuous-improvement.mdc`: present the proposed rule changes and wait for explicit approval. A direct request to change rules defines the intended outcome, but is not approval of the proposal. Do not ask again when the same concrete rule-change proposal and scope have already been approved.
 
-- Change architectural standards.
-- Remove or replace existing rules.
-- Introduce new architectural patterns.
-- Change the project's folder organization.
-- Create rules that conflict with existing decisions.
-
-When a change to the rules is necessary, explain the reason and propose the modification first.
-
-Wait for explicit approval before applying changes to existing rules.
+Do not create rules that conflict with approved decisions.

@@ -1,20 +1,26 @@
-
-import type { NameVO } from '../../../../shared/value-objects/name.value-object.js';
-import type { CompanyEmail } from '../value-objects/email.vo.js';
-import type { Password } from '../../../../shared/value-objects/password.vo.js';
-
+import * as crypto from 'crypto';
 
 export interface CompanyProps {
   id: string; 
-  companyName: NameVO;
-  name: NameVO;
+  companyName: string;
+  name: string;
   phone: string;
-  email: CompanyEmail;      
-  password: Password;
+  email: string;      
+  password: string;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
+
+
+
+
+export type CreateCompanyProps = Omit<
+  CompanyProps, 
+  'id' | 'isActive' | 'createdAt' | 'updatedAt'
+>;
+
+
 
 export class CompanyEntity {
   private constructor(
@@ -22,17 +28,40 @@ export class CompanyEntity {
   ) {}
 
   
-  static create(props: CompanyProps): CompanyEntity {
+  static create(props: CreateCompanyProps): CompanyEntity {
+    const now = new Date();
+    return new CompanyEntity({
+      ...props,
+      id: crypto.randomUUID(),
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  static restore(props: CompanyProps): CompanyEntity{
     return new CompanyEntity(props);
+  }
+
+  suspendForNonPayment(): void {
+    if(!this.props.isActive) return;
+    this.props.isActive = false;
+    this.props.updatedAt = new Date();
+  }
+
+  reactivate(): void {
+    if(this.props.isActive) return;
+    this.props.isActive = true;
+    this.props.updatedAt = new Date();
   }
 
 
   get id(): string { return this.props.id; }
-  get companyName(): string { return this.props.companyName.value; }
-  get name(): string { return this.props.name.value; }
+  get companyName(): string { return this.props.companyName; }
+  get name(): string { return this.props.name; }
   get phone(): string { return this.props.phone; }
-  get email(): string { return this.props.email.value; }
-  get password(): string { return this.props.password.value; }
+  get email(): string { return this.props.email; }
+  get password(): string { return this.props.password; }
   get isActive(): boolean { return this.props.isActive; }
   get createdAt(): Date { return this.props.createdAt; }
   get updatedAt(): Date { return this.props.updatedAt; }

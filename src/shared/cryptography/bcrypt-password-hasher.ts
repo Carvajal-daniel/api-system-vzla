@@ -1,6 +1,5 @@
 import { hash } from "bcrypt";
-import type { PasswordHasher } from "../../application/ports/password-hasher.js";
-import { number } from "zod";
+import type { PasswordHasher } from "./password-hasher.js";
 
 const BCRYPT_COST = Number(process.env.BCRYPT_COST);
 if (!BCRYPT_COST) {

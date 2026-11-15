@@ -1,6 +1,6 @@
 import { RegisterCompanyUseCase } from "../../../application/register-company.usecase.js";
 import { CompanyRepositoryDB } from "../../database/repositories/companies-repository.impl.js";
-import { BcryptPasswordHasher } from "../../cryptography/bcrypt-password-hasher.js";
+import { BcryptPasswordHasher } from "../../../../../shared/cryptography/bcrypt-password-hasher.js";
 import { RegisterCompanyController } from "../controllers/register-company.controller.js";
 
 export function MakeCreateController(){
