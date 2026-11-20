@@ -1,6 +1,6 @@
 ---
-description: Use when planning or implementing a complete module or substantial feature in an existing project.
-alwaysApply: false
+trigger: model_decision
+description: "Use when planning or implementing a complete module or substantial feature in an existing project."
 ---
 
 # Module Implementation
@@ -10,11 +10,11 @@ Use this workflow when asked to create or implement a complete module or substan
 ## 1. Inspect the Project
 
 - Read project instructions and inspect the relevant architecture, module structure, naming conventions, and implementation patterns.
-- Follow the architecture-identification process in `development-partner.mdc`; for hybrid projects, inspect the area this module will touch.
+- Follow the architecture-identification process in `development-partner.md`; for hybrid projects, inspect the area this module will touch.
 - Identify existing modules, shared capabilities, contracts, persistence mechanisms, delivery and integration code, and tests that may be affected.
 - Use the current repository and latest approved requirements as the source of truth. Do not impose a layout from this workflow; if the developer says an implementation was removed and must be rebuilt, do not recover or reuse its old files.
-- Creating a module in an existing project does not trigger project initialization or project restructuring. Do not run `project-initialization.mdc` or reorganize the project for this task. Work within the established architecture and structure; propose any necessary structural change separately and wait for its approval.
-- If the project is genuinely new or nearly empty and the request includes establishing its initial project structure, use `project-initialization.mdc` first. A module request in an established project is not, by itself, a reason to do so.
+- Creating a module in an existing project does not trigger project initialization or project restructuring. Do not run `project-initialization.md` or reorganize the project for this task. Work within the established architecture and structure; propose any necessary structural change separately and wait for its approval.
+- If the project is genuinely new or nearly empty and the request includes establishing its initial project structure, use `project-initialization.md` first. A module request in an established project is not, by itself, a reason to do so.
 
 ## 2. Understand the Module Requirements
 
@@ -39,7 +39,7 @@ Present a plan before implementation. Include only responsibilities that the req
 
 The listed concerns are planning prompts, not required artifacts. Use the project's existing structure and add only the components needed by the requirements.
 
-Apply `hexagonal-architecture.mdc` only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the evidence criteria in `development-partner.mdc`. Use other architecture-specific guidance only when it matches the architecture actually present. Treat DDD and other design concepts as optional, not as required artifacts. Keep technology-specific choices consistent with project conventions; do not restate them as universal rules.
+Apply `hexagonal-architecture.md` only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the evidence criteria in `development-partner.md`. Use other architecture-specific guidance only when it matches the architecture actually present. Treat DDD and other design concepts as optional, not as required artifacts. Keep technology-specific choices consistent with project conventions; do not restate them as universal rules.
 
 Before presenting the plan, review it as a complete path from entry point through the actual execution flow and relevant integrations to the user-visible result. Check that affected existing behavior, migrations, verification, scope exclusions, and unresolved product decisions are accounted for, and remove speculative work.
 

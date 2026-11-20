@@ -2,6 +2,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { RegisterCompanyUseCase } from "../../../application/register-company.usecase.js";
 import { registerCompanySchema } from "../../../../../shared/utils/validation-schemas.js";
+import { ZodError } from "zod";
 
 export class RegisterCompanyController {
   constructor(private readonly registerUseCase: RegisterCompanyUseCase) {}
@@ -16,14 +17,16 @@ export class RegisterCompanyController {
 
           return reply.status(201).send(result); 
 
-    } catch (error) {
-      
-      console.error("ERRO DETALHADO AQUI:", error) 
+    }catch (error) {
+  if (error instanceof ZodError) {
+    return reply.status(400).send({
+      message: 'Dados inválidos',
+      errors: error.issues,
+    });
+  }
 
-    return reply
-      .status(400)
-      .send(error)
-    }
+  throw error;
+}
     }
 
 

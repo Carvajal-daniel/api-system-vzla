@@ -1,6 +1,6 @@
 ---
-description: Use when planning the initial setup or structure of a new or nearly empty project.
-alwaysApply: false
+trigger: model_decision
+description: "Use when planning the initial setup or structure of a new or nearly empty project."
 ---
 
 # Project Initialization
@@ -33,9 +33,9 @@ If project rules are absent or incomplete, include a concise proposal for projec
 ## 4. Plan the Architecture and Structure
 
 - Identify the project's domains, major capabilities, modules, external actors, and integrations.
-- If code already exists, follow the architecture-identification process in `development-partner.mdc` and preserve the patterns found in each relevant area.
+- If code already exists, follow the architecture-identification process in `development-partner.md` and preserve the patterns found in each relevant area.
 - If no architecture is established, recommend a simple approach that fits the requirements and explain its impact. Do not restructure existing code or treat Hexagonal Architecture as the default.
-- Apply `hexagonal-architecture.mdc` only when Hexagonal Architecture is explicitly selected or identified, or when the relevant hybrid area meets the evidence criteria in `development-partner.mdc`. Do not restate or redefine those principles here.
+- Apply `hexagonal-architecture.md` only when Hexagonal Architecture is explicitly selected or identified, or when the relevant hybrid area meets the evidence criteria in `development-partner.md`. Do not restate or redefine those principles here.
 - Treat DDD, SOLID, Clean Architecture, and design patterns as options for solving identified problems, not required project features or artifacts.
 - Respect existing architectural decisions and project conventions. If they conflict with the proposed plan or are insufficient, explain the issue and request a decision before proceeding.
 - Propose a directory structure suited to the project. Directory names and layer layouts are choices to justify, not universal requirements.

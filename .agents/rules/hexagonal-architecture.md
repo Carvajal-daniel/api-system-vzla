@@ -1,11 +1,11 @@
 ---
-description: Use for design review. Apply Hexagonal-specific guidance only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the compatibility evidence in development-partner.mdc. The remaining design principles are optional and architecture-independent.
-alwaysApply: false
+trigger: model_decision
+description: "Use for design review. Apply Hexagonal-specific guidance only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the compatibility evidence in development-partner.md. The remaining design principles are optional and architecture-independent."
 ---
 
 # Architecture and Design Principles
 
-The Hexagonal-specific guidance in section 1 applies only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the evidence criteria in `development-partner.mdc`. Do not infer it from a language, framework, folder name, or design label alone. For other architectures, follow their observed structure and use only the optional architecture-independent guidance below when it fits.
+The Hexagonal-specific guidance in section 1 applies only when Hexagonal Architecture is explicitly selected or identified, or when the affected hybrid area meets the evidence criteria in `development-partner.md`. Do not infer it from a language, framework, folder name, or design label alone. For other architectures, follow their observed structure and use only the optional architecture-independent guidance below when it fits.
 
 ## 1. Hexagonal Architecture (Ports and Adapters)
 

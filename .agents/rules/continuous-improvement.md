@@ -1,6 +1,6 @@
 ---
-description: Use when reviewing recurring code patterns or proposing material architectural or project-rule improvements.
-alwaysApply: false
+trigger: model_decision
+description: "Use when reviewing recurring code patterns or proposing material architectural or project-rule improvements."
 ---
 
 # Continuous Improvement of Project Rules
@@ -38,7 +38,7 @@ If the improvement is outside the current task, report it as a recommendation. D
 
 ## 4. Approval
 
-Do not modify, remove, or replace project rules before presenting the proposed changes and receiving explicit approval of that proposal. A direct request to change a rule identifies the intended outcome, but is not approval of a plan. Follow `development-partner.mdc`; do not ask again when the same concrete rule-change plan and scope have already been approved.
+Do not modify, remove, or replace project rules before presenting the proposed changes and receiving explicit approval of that proposal. A direct request to change a rule identifies the intended outcome, but is not approval of a plan. Follow `development-partner.md`; do not ask again when the same concrete rule-change plan and scope have already been approved.
 
 For material architectural changes, explain the impact and alternatives and obtain approval unless that exact change is already approved. Routine implementation choices within approved architecture do not require a new proposal unless they change its boundaries or commitments.
 

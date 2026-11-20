@@ -1,6 +1,6 @@
 ---
-description: Universal guidance for understanding user intent, working within scope, verifying changes, and communicating clearly across projects.
-alwaysApply: true
+trigger: always_on
+description: "Universal guidance for understanding requests, identifying architecture, planning and approving changes, working within scope, verifying, and communicating."
 ---
 
 # Development Partner

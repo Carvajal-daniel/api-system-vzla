@@ -1,6 +1,6 @@
 ---
-description: Essential stack, architecture, security, and implementation conventions for this project.
-alwaysApply: true
+trigger: always_on
+description: "Essential stack, architecture, security, implementation, quality, integration, verification, and final-report conventions for this project."
 ---
 
 # Project Conventions
@@ -24,7 +24,7 @@ Do not replace these technologies or introduce alternative frameworks, ORMs, or 
 ## Current Structure and Modules
 
 - Always inspect the repository before stating which modules exist; do not infer module existence from plans, requests, or prior context.
-- Use `development-partner.mdc` to identify the architecture from the implementation. Do not infer it from this stack or framework.
+- Use `development-partner.md` to identify the architecture from the implementation. Do not infer it from this stack or framework.
 - This repository has areas using folders such as `domain/`, `application/`, and `infra/`. Treat them as observed conventions, not required layers; follow the target area and do not impose these names on a different architecture or hybrid area.
 - In areas that already use `application/`, keep application operations there. Do not create a parallel `usecases/` directory or another layer without a concrete need.
 - Do not rename directories, move files, or reorganize modules without approval. Propose structural changes first and explain their impact.
@@ -33,7 +33,7 @@ Do not replace these technologies or introduce alternative frameworks, ORMs, or 
 ## Architecture-Neutral Design
 
 - Follow the responsibilities and dependency patterns actually used in the target area. Keep components focused and avoid introducing boundaries, layers, ports, adapters, or abstractions only to match a named architecture.
-- Apply architecture-specific guidance only when the repository analysis identifies that architecture and the guidance fits the relevant area. For Hexagonal Architecture, use `hexagonal-architecture.mdc` only under its stated conditions.
+- Apply architecture-specific guidance only when the repository analysis identifies that architecture and the guidance fits the relevant area. For Hexagonal Architecture, use `hexagonal-architecture.md` only under its stated conditions.
 - In hybrid projects, preserve the established pattern for each area instead of forcing one structure across the repository.
 
 ## Dependencies and Composition
@@ -71,7 +71,7 @@ Do not replace these technologies or introduce alternative frameworks, ORMs, or 
 - Apply authentication and authorization to operations already defined as protected. Do not treat a client-supplied user or company identifier as proof of identity or access. Do not assume tenant isolation is fully implemented; inspect the existing authentication and tenant flows.
 - Apply rate limiting where appropriate and avoid insecure direct object references.
 - The platform is intended to support multiple businesses. For tenant-scoped operations, derive tenant context from trusted authentication and authorization, verify access, and scope every relevant data operation to that authorized tenant.
-- If the task appears to require a new authentication, authorization, or tenant-isolation mechanism, or the access policy is undefined, explain the uncertainty and follow the approval process in `development-partner.mdc` before implementing it. Identifying this need does not expand the approved scope.
+- If the task appears to require a new authentication, authorization, or tenant-isolation mechanism, or the access policy is undefined, explain the uncertainty and follow the approval process in `development-partner.md` before implementing it. Identifying this need does not expand the approved scope.
 
 ## Errors and Logging
 
@@ -119,7 +119,7 @@ After implementation, keep the final response brief and user-focused. Use these 
 
 **Pendências:** State only work that remains incomplete, or say there are none. Distinguish implementation, integration, and testing.
 
-**Próximo passo recomendado:** Recommend one useful next step based on the repository's actual state, or say that none is needed. Follow `development-partner.mdc` for how to choose and explain it.
+**Próximo passo recomendado:** Recommend one useful next step based on the repository's actual state, or say that none is needed. Follow `development-partner.md` for how to choose and explain it.
 
 Avoid long technical reports and extensive lists of files, classes, methods, or internal details unless the user asks for them. Explain technical terms only when needed. Do not claim checks passed unless they were run.
 
