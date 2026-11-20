@@ -1,4 +1,8 @@
 import * as crypto from 'crypto';
+import {
+  assertValidIanaTimeZone,
+  DEFAULT_COMPANY_TIMEZONE,
+} from '../../../appointments/domain/services/timezone-utils.js';
 
 export interface CompanyProps {
   id: string; 
@@ -8,6 +12,7 @@ export interface CompanyProps {
   email: string;      
   password: string;
   isActive: boolean;
+  timezone: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,8 +22,10 @@ export interface CompanyProps {
 
 export type CreateCompanyProps = Omit<
   CompanyProps, 
-  'id' | 'isActive' | 'createdAt' | 'updatedAt'
->;
+  'id' | 'isActive' | 'timezone' | 'createdAt' | 'updatedAt'
+> & {
+  timezone?: string | undefined;
+};
 
 
 
@@ -30,10 +37,14 @@ export class CompanyEntity {
   
   static create(props: CreateCompanyProps): CompanyEntity {
     const now = new Date();
+    const timezone = assertValidIanaTimeZone(
+      props.timezone ?? DEFAULT_COMPANY_TIMEZONE,
+    );
     return new CompanyEntity({
       ...props,
       id: crypto.randomUUID(),
       isActive: true,
+      timezone,
       createdAt: now,
       updatedAt: now,
     });
@@ -63,6 +74,7 @@ export class CompanyEntity {
   get email(): string { return this.props.email; }
   get password(): string { return this.props.password; }
   get isActive(): boolean { return this.props.isActive; }
+  get timezone(): string { return this.props.timezone; }
   get createdAt(): Date { return this.props.createdAt; }
   get updatedAt(): Date { return this.props.updatedAt; }
 }

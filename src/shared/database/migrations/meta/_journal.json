@@ -29,6 +29,13 @@
       "when": 1795181476624,
       "tag": "0003_services_schedules_commissions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795199119097,
+      "tag": "0004_appointments_and_schedule_blocks",
+      "breakpoints": true
     }
   ]
 }

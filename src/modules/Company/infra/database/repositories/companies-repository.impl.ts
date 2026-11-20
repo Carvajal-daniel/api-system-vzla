@@ -19,6 +19,7 @@ export class CompanyRepositoryDB implements CompaniesRepository {
         email: company.email,
         password: passwordHash,
         isActive: company.isActive,
+        timezone: company.timezone,
         createdAt: company.createdAt,
         updatedAt: company.updatedAt,
       });
@@ -33,5 +34,15 @@ export class CompanyRepositoryDB implements CompaniesRepository {
       .limit(1);
 
     return result.length > 0;
+  }
+
+  async updateTimezone(companyId: string, timezone: string): Promise<boolean> {
+    const updated = await db
+      .update(CompanyTable)
+      .set({ timezone, updatedAt: new Date() })
+      .where(eq(CompanyTable.id, companyId))
+      .returning({ id: CompanyTable.id });
+
+    return updated.length > 0;
   }
 }

@@ -6,6 +6,7 @@ export interface RegisterOwnerInputDTO {
   readonly phone: string;
   readonly email: string;
   readonly password: string;
+  readonly timezone?: string | undefined;
 }
 
 export interface LoginInputDTO {

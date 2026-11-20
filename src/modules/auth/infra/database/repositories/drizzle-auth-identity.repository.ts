@@ -48,6 +48,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
         email: record.email,
         password: record.passwordHash,
         isActive: record.isActive,
+        ...(record.timezone !== undefined ? { timezone: record.timezone } : {}),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       });

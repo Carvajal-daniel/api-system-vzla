@@ -1,0 +1,457 @@
+openapi: 3.1.0
+info:
+  title: SaaS Barberías y Salones API — Etapa 3 (Appointments, Availability & Schedule Blocks)
+  version: 1.0.0
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    AppointmentStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, COMPLETED, CANCELED, NO_SHOW]
+    ScheduleBlockOutput:
+      type: object
+      required: [id, companyId, collaboratorId, startsAt, endsAt, reason, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        collaboratorId: { type: string, format: uuid, nullable: true }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        reason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AffectedAppointmentSummary:
+      type: object
+      required: [id, collaboratorId, serviceId, clientName, clientPhone, startsAt, endsAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        collaboratorId: { type: string, format: uuid }
+        serviceId: { type: string, format: uuid }
+        clientName: { type: string }
+        clientPhone: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED]
+    CreateScheduleBlockResponse:
+      type: object
+      required: [block, affectedAppointments]
+      properties:
+        block:
+          $ref: "#/components/schemas/ScheduleBlockOutput"
+        affectedAppointments:
+          type: array
+          items:
+            $ref: "#/components/schemas/AffectedAppointmentSummary"
+    AppointmentOutput:
+      type: object
+      required:
+        - id
+        - companyId
+        - collaboratorId
+        - serviceId
+        - clientName
+        - clientPhone
+        - startsAt
+        - endsAt
+        - status
+        - cancellationReason
+        - serviceNameSnapshot
+        - servicePriceInCentsSnapshot
+        - serviceDurationMinutesSnapshot
+        - commissionPercentageSnapshot
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        collaboratorId: { type: string, format: uuid }
+        serviceId: { type: string, format: uuid }
+        clientName: { type: string }
+        clientPhone: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/AppointmentStatus" }
+        cancellationReason: { type: string, nullable: true }
+        serviceNameSnapshot: { type: string }
+        servicePriceInCentsSnapshot: { type: integer }
+        serviceDurationMinutesSnapshot: { type: integer }
+        commissionPercentageSnapshot: { type: number }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AvailabilitySlot:
+      type: object
+      required: [startsAt, endsAt, collaboratorId, collaboratorName]
+      properties:
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        collaboratorId: { type: string, format: uuid }
+        collaboratorName: { type: string }
+    AvailabilityResponse:
+      type: object
+      required: [companyId, serviceId, date, timezone, slotStepMinutes, serviceDurationMinutes, slots]
+      properties:
+        companyId: { type: string, format: uuid }
+        serviceId: { type: string, format: uuid }
+        date: { type: string, pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+        timezone: { type: string }
+        slotStepMinutes: { type: integer, example: 15 }
+        serviceDurationMinutes: { type: integer }
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilitySlot"
+
+paths:
+  /schedule-blocks:
+    post:
+      tags: [Schedule Blocks (Owner)]
+      summary: Create a collaborator or company-wide schedule block
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsAt, endsAt]
+              properties:
+                collaboratorId: { type: string, format: uuid, nullable: true }
+                startsAt: { type: string, format: date-time }
+                endsAt: { type: string, format: date-time }
+                reason: { type: string, maxLength: 500, nullable: true }
+      responses:
+        "201":
+          description: Block created (with affected active appointments list if any)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateScheduleBlockResponse" }
+        "400": { description: Validation error }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (requires OWNER) }
+        "404": { description: Collaborator not found in company }
+    get:
+      tags: [Schedule Blocks (Owner)]
+      summary: List schedule blocks for the authenticated owner's company
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: collaboratorId
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: List of schedule blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduleBlockOutput" }
+
+  /schedule-blocks/{blockId}:
+    delete:
+      tags: [Schedule Blocks (Owner)]
+      summary: Delete a schedule block belonging to the owner's company
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: blockId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Block deleted }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden }
+        "404": { description: Block not found in company }
+
+  /me/schedule-blocks:
+    post:
+      tags: [Collaborator Self-Service]
+      summary: Create a personal schedule block / absence for the authenticated collaborator
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsAt, endsAt]
+              properties:
+                startsAt: { type: string, format: date-time }
+                endsAt: { type: string, format: date-time }
+                reason: { type: string, maxLength: 500, nullable: true }
+      responses:
+        "201":
+          description: Personal block created with affected active appointments list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateScheduleBlockResponse" }
+        "400": { description: Validation error }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (requires COLLABORATOR) }
+    get:
+      tags: [Collaborator Self-Service]
+      summary: List personal schedule blocks for the authenticated collaborator
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: List of personal schedule blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduleBlockOutput" }
+
+  /me/schedule-blocks/{blockId}:
+    delete:
+      tags: [Collaborator Self-Service]
+      summary: Delete a personal schedule block owned by the authenticated collaborator
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: blockId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Block deleted }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden }
+        "404": { description: Block not found }
+
+  /public/companies/{companyId}/availability:
+    get:
+      tags: [Public Booking]
+      summary: Query available booking slots for a company, service, date, and optional collaborator
+      parameters:
+        - in: path
+          name: companyId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: serviceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: date
+          required: true
+          schema: { type: string, pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+        - in: query
+          name: collaboratorId
+          required: false
+          schema: { type: string, format: uuid }
+        - in: query
+          name: timezone
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Available slots calculated against work schedules, blocks, and active appointments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AvailabilityResponse" }
+        "400": { description: Invalid query parameters or timezone }
+        "404": { description: Active company, service, or collaborator not found }
+
+  /public/companies/{companyId}/appointments:
+    post:
+      tags: [Public Booking]
+      summary: Create an appointment without client login (starts as PENDING; endsAt derived on server)
+      parameters:
+        - in: path
+          name: companyId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceId, collaboratorId, startsAt, clientName, clientPhone]
+              properties:
+                serviceId: { type: string, format: uuid }
+                collaboratorId: { type: string, format: uuid }
+                startsAt: { type: string, format: date-time }
+                clientName: { type: string, minLength: 2, maxLength: 120 }
+                clientPhone: { type: string, minLength: 10, maxLength: 30 }
+      responses:
+        "201":
+          description: Appointment created as PENDING
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppointmentOutput" }
+        "400": { description: Validation error (past time, outside work hours, break, or block) }
+        "404": { description: Active company, service, or enabled collaborator not found }
+        "409": { description: Slot conflict (double-booking prevented) }
+
+  /appointments:
+    post:
+      tags: [Appointments (Owner)]
+      summary: Create an appointment as authenticated OWNER (COLLABORATOR forbidden; endsAt derived on server)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceId, collaboratorId, startsAt, clientName, clientPhone]
+              properties:
+                serviceId: { type: string, format: uuid }
+                collaboratorId: { type: string, format: uuid }
+                startsAt: { type: string, format: date-time }
+                clientName: { type: string, minLength: 2, maxLength: 120 }
+                clientPhone: { type: string, minLength: 10, maxLength: 30 }
+                initialStatus:
+                  type: string
+                  enum: [PENDING, CONFIRMED]
+                  default: PENDING
+      responses:
+        "201":
+          description: Appointment created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppointmentOutput" }
+        "400": { description: Validation error }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (COLLABORATOR cannot create appointments) }
+        "404": { description: Service or enabled collaborator not found }
+        "409": { description: Slot conflict }
+    get:
+      tags: [Appointments (Owner)]
+      summary: List company appointments with optional filters
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: collaboratorId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/AppointmentStatus" }
+      responses:
+        "200":
+          description: Company appointments ordered by startsAt ASC
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AppointmentOutput" }
+
+  /me/appointments:
+    get:
+      tags: [Collaborator Self-Service]
+      summary: List only appointments assigned to the authenticated collaborator
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/AppointmentStatus" }
+      responses:
+        "200":
+          description: Collaborator's own appointments ordered by startsAt ASC
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AppointmentOutput" }
+
+  /appointments/{appointmentId}/status:
+    patch:
+      tags: [Appointments (Owner & Collaborator)]
+      summary: Transition appointment status following domain state machine
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: appointmentId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [CONFIRMED, COMPLETED, CANCELED, NO_SHOW]
+                cancellationReason: { type: string, maxLength: 500, nullable: true }
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppointmentOutput" }
+        "400": { description: Validation error }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (collaborator attempting to modify another collaborator's appointment) }
+        "404": { description: Appointment not found in company }
+        "409": { description: Invalid status transition }
+
+  /appointments/{appointmentId}/reschedule:
+    patch:
+      tags: [Appointments (Owner)]
+      summary: Reschedule an active appointment (PENDING or CONFIRMED) atomically
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: appointmentId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsAt]
+              properties:
+                startsAt: { type: string, format: date-time }
+                collaboratorId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Appointment rescheduled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppointmentOutput" }
+        "400": { description: Validation error (past time, outside schedule, break, or block) }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (requires OWNER) }
+        "404": { description: Appointment or collaborator not found }
+        "409": { description: Cannot reschedule terminal appointment or slot conflict }

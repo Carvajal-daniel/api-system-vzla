@@ -27,6 +27,7 @@ export class RegisterCompanyUseCase {
       phone: data.phone,
       email: data.email,
       password: passwordHash,
+      timezone: data.timezone,
     });
 
 
@@ -42,7 +43,8 @@ export class RegisterCompanyUseCase {
     return {
       id: company.id,
       companyName: company.companyName,
-      email: company.email
+      email: company.email,
+      timezone: company.timezone,
     };
   }
 }

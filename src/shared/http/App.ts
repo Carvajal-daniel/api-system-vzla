@@ -6,6 +6,7 @@ import { ComapnyRoutes } from "../../modules/Company/infra/http/routers/company-
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
+import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
 import { isProduction } from "../config/env.js";
 import { registerErrorHandler } from "./error-handler.js";
 
@@ -45,5 +46,6 @@ app.register(ComapnyRoutes);
 app.register(CollaboratorRoutes);
 app.register(servicesRoutes);
 app.register(workSchedulesRoutes);
+app.register(appointmentsRoutes);
 
 export { app };

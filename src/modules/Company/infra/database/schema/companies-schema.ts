@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, timestamp, uuid, index } from "drizzle-orm/pg-core";
+import { boolean, pgTable, text, timestamp, uuid, index, varchar } from "drizzle-orm/pg-core";
 
 export const CompanyTable = pgTable("companies", { 
 
@@ -20,6 +20,9 @@ export const CompanyTable = pgTable("companies", {
   
   // Status do cadastro / Ativo para login
   isActive: boolean("is_active").default(true).notNull(),
+
+  // Fuso horário IANA da empresa (fallback de migração: America/Caracas; aceita Brasil/Venezuela/qualquer IANA válida)
+  timezone: varchar("timezone", { length: 64 }).default("America/Caracas").notNull(),
   
   // Auditoria (Garantindo Timezone para o cenário de Maturín/Venezuela VET UTC-4)
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

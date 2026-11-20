@@ -35,6 +35,7 @@ export interface CreateOwnerCompanyRecord {
   readonly email: string;
   readonly passwordHash: string;
   readonly isActive: boolean;
+  readonly timezone?: string | undefined;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

@@ -5,6 +5,7 @@ import {
   nameSchema,
   passwordSchema,
   phoneSchema,
+  timezoneSchema,
 } from "../../../../../shared/utils/validation-schemas.js";
 
 export const registerOwnerBodySchema = z.object({
@@ -13,6 +14,7 @@ export const registerOwnerBodySchema = z.object({
   phone: phoneSchema,
   email: emailSchema,
   password: passwordSchema,
+  timezone: timezoneSchema.optional(),
 });
 
 export const loginBodySchema = z.object({
@@ -66,6 +68,11 @@ export const registerOwnerOpenApiSchema = {
         minLength: 6,
         maxLength: 15,
         description: "6 to 15 characters including at least one special character",
+      },
+      timezone: {
+        type: "string",
+        maxLength: 64,
+        description: "Valid IANA timezone (e.g. America/Sao_Paulo, America/Caracas)",
       },
     },
   },

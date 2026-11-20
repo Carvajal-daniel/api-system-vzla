@@ -4,10 +4,12 @@ export interface RegisterCompanyInputDTO {
   phone: string;
   email: string;
   password: string;
+  timezone?: string | undefined;
 }
 
 export interface RegisterCompanyOutputDTO {
   id: string;
   companyName: string;
   email: string;
+  timezone: string;
 }

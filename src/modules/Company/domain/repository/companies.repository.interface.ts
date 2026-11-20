@@ -5,4 +5,5 @@ import type { CompanyEmail } from "../value-objects/company-email.vo.js";
 export interface CompaniesRepository {
   existsByEmail(email: string): Promise<boolean>;
   save(company: CompanyEntity, passwordHash: string): Promise<void>;
+  updateTimezone(companyId: string, timezone: string): Promise<boolean>;
 }

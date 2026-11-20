@@ -32,6 +32,7 @@ export class RegisterOwnerUseCase {
       phone: input.phone.trim(),
       email: normalizedEmail,
       password: passwordHash,
+      timezone: input.timezone,
     });
 
     await this.authIdentityRepository.createOwnerCompany({
@@ -42,6 +43,7 @@ export class RegisterOwnerUseCase {
       email: company.email,
       passwordHash,
       isActive: company.isActive,
+      timezone: company.timezone,
       createdAt: company.createdAt,
       updatedAt: company.updatedAt,
     });
