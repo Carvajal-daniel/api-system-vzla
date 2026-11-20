@@ -1,4 +1,4 @@
-import { hash } from "bcrypt";
+import { compare, hash } from "bcrypt";
 import type { PasswordHasher } from "./password-hasher.js";
 
 const BCRYPT_COST = Number(process.env.BCRYPT_COST);
@@ -9,5 +9,9 @@ if (!BCRYPT_COST) {
 export class BcryptPasswordHasher implements PasswordHasher {
   async hash(plainText: string): Promise<string> {
     return hash(plainText, BCRYPT_COST);
+  }
+
+  async compare(plainText: string, passwordHash: string): Promise<boolean> {
+    return compare(plainText, passwordHash);
   }
 }

@@ -1,6 +1,7 @@
 import fastify from "fastify";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
+import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
 import { ComapnyRoutes } from "../../modules/Company/infra/http/routers/company-routes.js";
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
@@ -39,6 +40,7 @@ if (!isProduction()) {
   });
 }
 
+app.register(authRoutes);
 app.register(ComapnyRoutes);
 app.register(CollaboratorRoutes);
 app.register(servicesRoutes);

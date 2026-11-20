@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../App.js";
+import { resetActorStatusVerifier, setActorStatusVerifier } from "../auth/authenticate.js";
 
 describe("Services & Work Schedules HTTP Layer (JWT, RBAC, Zod, OpenAPI)", () => {
   const testSecret = "vitest-http-integration-secret";
@@ -16,6 +17,7 @@ describe("Services & Work Schedules HTTP Layer (JWT, RBAC, Zod, OpenAPI)", () =>
 
   beforeAll(async () => {
     process.env.JWT_SECRET = testSecret;
+    setActorStatusVerifier(async () => true);
     await app.ready();
 
     ownerToken = jwt.sign({ sub: ownerId, companyId, role: "OWNER" }, testSecret);
@@ -26,6 +28,7 @@ describe("Services & Work Schedules HTTP Layer (JWT, RBAC, Zod, OpenAPI)", () =>
   });
 
   afterAll(async () => {
+    resetActorStatusVerifier();
     if (previousSecret === undefined) {
       delete process.env.JWT_SECRET;
     } else {
