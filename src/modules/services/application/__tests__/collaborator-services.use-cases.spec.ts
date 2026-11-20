@@ -11,6 +11,7 @@ import {
 } from "../../domain/errors/service-errors.js";
 import { LinkCollaboratorToServiceUseCase } from "../use-cases/link-collaborator-to-service.use-case.js";
 import { ListCollaboratorAssignedServicesUseCase } from "../use-cases/list-collaborator-assigned-services.use-case.js";
+import { ListServiceCollaboratorsUseCase } from "../use-cases/list-service-collaborators.use-case.js";
 import { UnlinkCollaboratorFromServiceUseCase } from "../use-cases/unlink-collaborator-from-service.use-case.js";
 import { UpdateCollaboratorServiceCommissionUseCase } from "../use-cases/update-collaborator-service-commission.use-case.js";
 import { InMemoryCollaboratorLookupRepository } from "./in-memory-collaborator-lookup.repository.js";
@@ -300,5 +301,38 @@ describe("Collaborator-Services & Commissions Use Cases (US2)", () => {
     await expect(listAssignedUseCase.execute(ownerA)).rejects.toBeInstanceOf(
       UnauthorizedServiceActionError,
     );
+  });
+
+  it("allows an OWNER to list collaborators linked to their service, enforcing tenant isolation and RBAC", async () => {
+    await linkUseCase.execute(ownerA, {
+      serviceId: serviceA.id,
+      collaboratorId: activeCollabAId,
+      commissionPercentage: 45,
+    });
+
+    const listServiceCollaboratorsUseCase = new ListServiceCollaboratorsUseCase(
+      servicesRepo,
+      linksRepo,
+      collaboratorLookupRepo,
+    );
+
+    const linked = await listServiceCollaboratorsUseCase.execute(ownerA, serviceA.id);
+    expect(linked).toEqual([
+      {
+        collaboratorId: activeCollabAId,
+        name: "Carlos Barbero",
+        specialty: "Barba y Corte",
+        isActive: true,
+        commissionPercentage: 45,
+      },
+    ]);
+
+    await expect(
+      listServiceCollaboratorsUseCase.execute(ownerB, serviceA.id),
+    ).rejects.toBeInstanceOf(ServiceNotFoundError);
+
+    await expect(
+      listServiceCollaboratorsUseCase.execute(collaboratorActorA, serviceA.id),
+    ).rejects.toBeInstanceOf(UnauthorizedServiceActionError);
   });
 });

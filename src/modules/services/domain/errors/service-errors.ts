@@ -67,3 +67,9 @@ export class CollaboratorNotFoundError extends DomainError {
     super(message, "NOT_FOUND");
   }
 }
+
+export class PublicCompanyNotFoundError extends DomainError {
+  constructor(message = "Company not found.") {
+    super(message, "NOT_FOUND");
+  }
+}

@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { PasswordHasher } from "../../../../shared/cryptography/password-hasher.js";
 import type { CollaboratorEntity } from "../../domain/entities/collaborator.entity.js";
-import type { CollaboratorsRepository } from "../../domain/repository/collaborators.repository.interface.js";
+import type {
+  CollaboratorRecord,
+  CollaboratorsRepository,
+} from "../../domain/repository/collaborators.repository.interface.js";
 import {
+  CannotModifyOwnOwnerStatusError,
   CollaboratorCompanyNotFoundError,
   CollaboratorEmailAlreadyInError,
+  CollaboratorRecordNotFoundError,
 } from "../errors/collaborator-errors.js";
+import { ListCompanyCollaboratorsUseCase } from "../list-company-collaborators.usecase.js";
 import { RegisterCollaboratorUseCase } from "../register-collaborator.usecase.js";
+import { UpdateCollaboratorStatusUseCase } from "../update-collaborator-status.usecase.js";
 
 class FakePasswordHasher implements PasswordHasher {
   async hash(plainText: string): Promise<string> {
@@ -20,7 +27,7 @@ class FakePasswordHasher implements PasswordHasher {
 
 class InMemoryCollaboratorsRepository implements CollaboratorsRepository {
   readonly companies = new Map<string, { id: string; email: string }>();
-  readonly collaborators: CollaboratorEntity[] = [];
+  readonly collaborators: Array<CollaboratorRecord & { password: string }> = [];
 
   seedCompany(id: string, email: string): void {
     this.companies.set(id, { id, email: email.trim().toLowerCase() });
@@ -41,7 +48,50 @@ class InMemoryCollaboratorsRepository implements CollaboratorsRepository {
   }
 
   async save(collaborator: CollaboratorEntity): Promise<void> {
-    this.collaborators.push(collaborator);
+    this.collaborators.push({
+      id: collaborator.id,
+      companyId: collaborator.companyId,
+      name: collaborator.name,
+      email: collaborator.email,
+      password: collaborator.password,
+      phone: collaborator.phone,
+      specialty: collaborator.specialty,
+      commissionPercentage: collaborator.commissionPercentage,
+      isActive: collaborator.isActive,
+    });
+  }
+
+  async findAllByCompanyId(companyId: string): Promise<CollaboratorRecord[]> {
+    return this.collaborators
+      .filter((c) => c.companyId === companyId)
+      .map(({ password: _password, ...record }) => ({ ...record }));
+  }
+
+  async updateStatusInCompany(
+    collaboratorId: string,
+    companyId: string,
+    isActive: boolean,
+  ): Promise<CollaboratorRecord | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) {
+      return null;
+    }
+
+    const updated: CollaboratorRecord = {
+      id: found.id,
+      companyId: found.companyId,
+      name: found.name,
+      email: found.email,
+      phone: found.phone,
+      specialty: found.specialty,
+      commissionPercentage: found.commissionPercentage,
+      isActive,
+    };
+    const index = this.collaborators.indexOf(found);
+    this.collaborators[index] = { ...updated, password: found.password };
+    return updated;
   }
 }
 
@@ -138,5 +188,74 @@ describe("RegisterCollaboratorUseCase", () => {
         commissionPercentage: 40,
       }),
     ).rejects.toBeInstanceOf(CollaboratorEmailAlreadyInError);
+  });
+
+  it("lists collaborators scoped to company and updates status while blocking self-deactivation and cross-tenant updates", async () => {
+    const otherCompanyId = "22222222-2222-4222-8222-222222222222";
+    const repository = new InMemoryCollaboratorsRepository();
+    repository.seedCompany(companyId, "owner@barber.com");
+    repository.seedCompany(otherCompanyId, "owner@other.com");
+
+    const registerUseCase = new RegisterCollaboratorUseCase(repository, new FakePasswordHasher());
+    const listUseCase = new ListCompanyCollaboratorsUseCase(repository);
+    const updateStatusUseCase = new UpdateCollaboratorStatusUseCase(repository);
+
+    const createdA = await registerUseCase.execute({
+      name: "Carlos Silva",
+      email: "carlos@barber.com",
+      password: "Secret@123",
+      phone: "+584121234567",
+      companyId,
+      specialty: "Corte",
+      commissionPercentage: 40,
+    });
+    await registerUseCase.execute({
+      name: "Outro Barbeiro",
+      email: "outro@other.com",
+      password: "Secret@123",
+      phone: "+584129999999",
+      companyId: otherCompanyId,
+      specialty: "Barba",
+      commissionPercentage: 50,
+    });
+
+    const listA = await listUseCase.execute(companyId);
+    expect(listA).toHaveLength(1);
+    expect(listA[0]).toMatchObject({
+      id: createdA.id,
+      name: "Carlos Silva",
+      email: "carlos@barber.com",
+      phone: "+584121234567",
+      specialty: "Corte",
+      commissionPercentage: 40,
+      isActive: true,
+      role: "COLLABORATOR",
+    });
+
+    const deactivated = await updateStatusUseCase.execute({
+      actorUserId: companyId,
+      companyId,
+      collaboratorId: createdA.id,
+      isActive: false,
+    });
+    expect(deactivated.isActive).toBe(false);
+
+    await expect(
+      updateStatusUseCase.execute({
+        actorUserId: companyId,
+        companyId,
+        collaboratorId: companyId,
+        isActive: false,
+      }),
+    ).rejects.toBeInstanceOf(CannotModifyOwnOwnerStatusError);
+
+    await expect(
+      updateStatusUseCase.execute({
+        actorUserId: otherCompanyId,
+        companyId: otherCompanyId,
+        collaboratorId: createdA.id,
+        isActive: true,
+      }),
+    ).rejects.toBeInstanceOf(CollaboratorRecordNotFoundError);
   });
 });

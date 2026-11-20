@@ -70,6 +70,14 @@ export interface CollaboratorAssignedServiceOutputDTO {
   commissionPercentage: number;
 }
 
+export interface ServiceCollaboratorOutputDTO {
+  collaboratorId: string;
+  name: string;
+  specialty: string;
+  isActive: boolean;
+  commissionPercentage: number;
+}
+
 export interface PublicCatalogCollaboratorOutputDTO {
   id: string;
   name: string;
@@ -83,6 +91,17 @@ export interface PublicCatalogServiceOutputDTO {
   durationMinutes: number;
   priceInCents: number;
   collaborators: PublicCatalogCollaboratorOutputDTO[];
+}
+
+export interface PublicCompanyInfoDTO {
+  id: string;
+  companyName: string;
+  timezone: string;
+}
+
+export interface PublicCompanyCatalogOutputDTO {
+  company: PublicCompanyInfoDTO;
+  services: PublicCatalogServiceOutputDTO[];
 }
 
 export function toServiceOutputDTO(service: ServiceEntity): ServiceOutputDTO {

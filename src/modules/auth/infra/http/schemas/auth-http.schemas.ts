@@ -124,9 +124,10 @@ export const getMeOpenApiSchema = {
           properties: {
             id: { type: "string", format: "uuid" },
             companyName: { type: "string" },
+            timezone: { type: "string" },
             isActive: { type: "boolean" },
           },
-          required: ["id", "companyName", "isActive"],
+          required: ["id", "companyName", "timezone", "isActive"],
         },
       },
       required: ["role", "id", "companyId", "name", "email", "phone", "isActive", "company"],

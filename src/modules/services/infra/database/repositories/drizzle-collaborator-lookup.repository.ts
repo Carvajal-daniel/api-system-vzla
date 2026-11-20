@@ -31,6 +31,31 @@ export class DrizzleCollaboratorLookupRepository implements CollaboratorLookupRe
     return rows[0] ?? null;
   }
 
+  async findByIdsInCompany(
+    collaboratorIds: string[],
+    companyId: string,
+  ): Promise<CollaboratorSummary[]> {
+    if (collaboratorIds.length === 0) {
+      return [];
+    }
+
+    return db
+      .select({
+        id: CollaboratorTable.id,
+        companyId: CollaboratorTable.companyId,
+        name: CollaboratorTable.name,
+        specialty: CollaboratorTable.specialty,
+        isActive: CollaboratorTable.isActive,
+      })
+      .from(CollaboratorTable)
+      .where(
+        and(
+          eq(CollaboratorTable.companyId, companyId),
+          inArray(CollaboratorTable.id, collaboratorIds),
+        ),
+      );
+  }
+
   async findActiveByIdsInCompany(
     collaboratorIds: string[],
     companyId: string,

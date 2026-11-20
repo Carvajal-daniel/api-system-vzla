@@ -1,33 +1,59 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { CollaboratorServiceEntity } from "../../domain/entities/collaborator-service.entity.js";
 import { ServiceEntity } from "../../domain/entities/service.entity.js";
+import { PublicCompanyNotFoundError } from "../../domain/errors/service-errors.js";
 import { ListPublicCompanyCatalogUseCase } from "../use-cases/list-public-company-catalog.use-case.js";
 import { InMemoryCollaboratorLookupRepository } from "./in-memory-collaborator-lookup.repository.js";
 import { InMemoryCollaboratorServicesRepository } from "./in-memory-collaborator-services.repository.js";
+import { InMemoryCompanyLookupRepository } from "./in-memory-company-lookup.repository.js";
 import { InMemoryServicesRepository } from "./in-memory-services.repository.js";
 
 describe("Public Company Catalog Use Case (US5)", () => {
   const companyA = "11111111-1111-4111-8111-111111111111";
   const companyB = "22222222-2222-4222-8222-222222222222";
+  const inactiveCompany = "33333333-3333-4333-8333-333333333333";
   const unknownCompany = "99999999-9999-4999-8999-999999999999";
 
   let servicesRepo: InMemoryServicesRepository;
   let linksRepo: InMemoryCollaboratorServicesRepository;
   let collaboratorLookupRepo: InMemoryCollaboratorLookupRepository;
+  let companyLookupRepo: InMemoryCompanyLookupRepository;
   let useCase: ListPublicCompanyCatalogUseCase;
 
   beforeEach(() => {
     servicesRepo = new InMemoryServicesRepository();
     linksRepo = new InMemoryCollaboratorServicesRepository();
     collaboratorLookupRepo = new InMemoryCollaboratorLookupRepository();
+    companyLookupRepo = new InMemoryCompanyLookupRepository();
+
+    companyLookupRepo.seed({
+      id: companyA,
+      companyName: "Barbearia Norte",
+      timezone: "America/Sao_Paulo",
+      isActive: true,
+    });
+    companyLookupRepo.seed({
+      id: companyB,
+      companyName: "Salon Sur",
+      timezone: "America/Caracas",
+      isActive: true,
+    });
+    companyLookupRepo.seed({
+      id: inactiveCompany,
+      companyName: "Salon Inactivo",
+      timezone: "America/Caracas",
+      isActive: false,
+    });
+
     useCase = new ListPublicCompanyCatalogUseCase(
       servicesRepo,
       linksRepo,
       collaboratorLookupRepo,
+      companyLookupRepo,
     );
   });
 
-  it("returns only active services and active linked collaborators without exposing commissions or other companies", async () => {
+  it("returns company info, only active services, and active linked collaborators without exposing commissions or other companies", async () => {
     const activeService = ServiceEntity.create({
       companyId: companyA,
       name: "Corte Clásico",
@@ -101,9 +127,14 @@ describe("Public Company Catalog Use Case (US5)", () => {
 
     const catalog = await useCase.execute(companyA);
 
-    expect(catalog).toHaveLength(2);
+    expect(catalog.company).toEqual({
+      id: companyA,
+      companyName: "Barbearia Norte",
+      timezone: "America/Sao_Paulo",
+    });
+    expect(catalog.services).toHaveLength(2);
 
-    const classic = catalog.find((item) => item.id === activeService.id);
+    const classic = catalog.services.find((item) => item.id === activeService.id);
     expect(classic).toEqual({
       id: activeService.id,
       name: "Corte Clásico",
@@ -120,12 +151,28 @@ describe("Public Company Catalog Use Case (US5)", () => {
     });
     expect(JSON.stringify(catalog)).not.toContain("commissionPercentage");
 
-    const wash = catalog.find((item) => item.id === serviceWithoutCollaborators.id);
+    const wash = catalog.services.find((item) => item.id === serviceWithoutCollaborators.id);
     expect(wash?.collaborators).toEqual([]);
   });
 
-  it("returns an empty catalog for an unknown company or a company with no active services", async () => {
-    const catalog = await useCase.execute(unknownCompany);
-    expect(catalog).toEqual([]);
+  it("returns company info with an empty services list when an active company has no active services", async () => {
+    const catalog = await useCase.execute(companyB);
+    expect(catalog).toEqual({
+      company: {
+        id: companyB,
+        companyName: "Salon Sur",
+        timezone: "America/Caracas",
+      },
+      services: [],
+    });
+  });
+
+  it("throws PublicCompanyNotFoundError for unknown or inactive companies", async () => {
+    await expect(useCase.execute(unknownCompany)).rejects.toBeInstanceOf(
+      PublicCompanyNotFoundError,
+    );
+    await expect(useCase.execute(inactiveCompany)).rejects.toBeInstanceOf(
+      PublicCompanyNotFoundError,
+    );
   });
 });

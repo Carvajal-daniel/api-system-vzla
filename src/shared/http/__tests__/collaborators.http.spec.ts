@@ -2,7 +2,10 @@ import fastify, { type FastifyInstance } from "fastify";
 import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CollaboratorEntity } from "../../../modules/Collaborators/domain/entities/collaborator.entity.js";
-import type { CollaboratorsRepository } from "../../../modules/Collaborators/domain/repository/collaborators.repository.interface.js";
+import type {
+  CollaboratorRecord,
+  CollaboratorsRepository,
+} from "../../../modules/Collaborators/domain/repository/collaborators.repository.interface.js";
 import { CollaboratorRoutes } from "../../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import type { PasswordHasher } from "../../cryptography/password-hasher.js";
 import { app as mainApp } from "../App.js";
@@ -21,7 +24,7 @@ class FastTestPasswordHasher implements PasswordHasher {
 
 class InMemoryCollaboratorsHttpRepository implements CollaboratorsRepository {
   readonly companies = new Map<string, { id: string; email: string; isActive: boolean }>();
-  readonly collaborators: CollaboratorEntity[] = [];
+  readonly collaborators: Array<CollaboratorRecord & { password: string }> = [];
 
   seedCompany(id: string, email: string, isActive = true): void {
     this.companies.set(id, { id, email: email.trim().toLowerCase(), isActive });
@@ -39,7 +42,50 @@ class InMemoryCollaboratorsHttpRepository implements CollaboratorsRepository {
   }
 
   async save(collaborator: CollaboratorEntity): Promise<void> {
-    this.collaborators.push(collaborator);
+    this.collaborators.push({
+      id: collaborator.id,
+      companyId: collaborator.companyId,
+      name: collaborator.name,
+      email: collaborator.email,
+      password: collaborator.password,
+      phone: collaborator.phone,
+      specialty: collaborator.specialty,
+      commissionPercentage: collaborator.commissionPercentage,
+      isActive: collaborator.isActive,
+    });
+  }
+
+  async findAllByCompanyId(companyId: string): Promise<CollaboratorRecord[]> {
+    return this.collaborators
+      .filter((c) => c.companyId === companyId)
+      .map(({ password: _password, ...record }) => ({ ...record }));
+  }
+
+  async updateStatusInCompany(
+    collaboratorId: string,
+    companyId: string,
+    isActive: boolean,
+  ): Promise<CollaboratorRecord | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) {
+      return null;
+    }
+
+    const updated: CollaboratorRecord = {
+      id: found.id,
+      companyId: found.companyId,
+      name: found.name,
+      email: found.email,
+      phone: found.phone,
+      specialty: found.specialty,
+      commissionPercentage: found.commissionPercentage,
+      isActive,
+    };
+    const index = this.collaborators.indexOf(found);
+    this.collaborators[index] = { ...updated, password: found.password };
+    return updated;
   }
 }
 
@@ -248,6 +294,125 @@ describe("Collaborators HTTP Layer (POST /collaborators, JWT RBAC, Global Email 
     const bodySchema = postOp?.requestBody?.content?.["application/json"]?.schema;
     expect(bodySchema?.properties?.companyId).toBeUndefined();
     expect(bodySchema?.required).not.toContain("companyId");
+    expect(spec.paths?.["/collaborators"]).toHaveProperty("get");
+    expect(spec.paths?.["/collaborators/{collaboratorId}/status"]).toHaveProperty("patch");
+
+    await testApp.close();
+  });
+
+  it("lists company collaborators via GET /collaborators with tenant isolation and updates status via PATCH /collaborators/:collaboratorId/status", async () => {
+    const ownerToken = signToken({
+      sub: ownerCompanyId,
+      companyId: ownerCompanyId,
+      role: "OWNER",
+    });
+    const otherOwnerToken = signToken({
+      sub: otherCompanyId,
+      companyId: otherCompanyId,
+      role: "OWNER",
+    });
+    const collaboratorToken = signToken({
+      sub: collaboratorId,
+      companyId: ownerCompanyId,
+      role: "COLLABORATOR",
+    });
+
+    const createdA = await testApp.inject({
+      method: "POST",
+      url: "/collaborators",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Pedro Barber",
+        email: "pedro@norte.com",
+        password: "Secret@123",
+        phone: "+584121234567",
+        specialty: "Barba",
+        commissionPercentage: 45,
+      },
+    });
+    expect(createdA.statusCode).toBe(201);
+    const createdABody = createdA.json() as { id: string };
+
+    const createdB = await testApp.inject({
+      method: "POST",
+      url: "/collaborators",
+      headers: { authorization: `Bearer ${otherOwnerToken}` },
+      payload: {
+        name: "Luis Sur",
+        email: "luis@sur.com",
+        password: "Secret@123",
+        phone: "+584129999999",
+        specialty: "Corte",
+        commissionPercentage: 50,
+      },
+    });
+    expect(createdB.statusCode).toBe(201);
+
+    // RBAC: COLLABORATOR não pode listar nem alterar status
+    const collabList = await testApp.inject({
+      method: "GET",
+      url: "/collaborators",
+      headers: { authorization: `Bearer ${collaboratorToken}` },
+    });
+    expect(collabList.statusCode).toBe(403);
+
+    const listA = await testApp.inject({
+      method: "GET",
+      url: "/collaborators",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(listA.statusCode).toBe(200);
+    const listABody = listA.json() as {
+      collaborators: Array<Record<string, unknown>>;
+    };
+    expect(listABody.collaborators).toHaveLength(1);
+    expect(listABody.collaborators[0]).toEqual({
+      id: createdABody.id,
+      name: "Pedro Barber",
+      email: "pedro@norte.com",
+      phone: "+584121234567",
+      specialty: "Barba",
+      commissionPercentage: 45,
+      isActive: true,
+      role: "COLLABORATOR",
+    });
+
+    // Desativar colaborador da própria empresa -> 200
+    const deactivateResponse = await testApp.inject({
+      method: "PATCH",
+      url: `/collaborators/${createdABody.id}/status`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { isActive: false },
+    });
+    expect(deactivateResponse.statusCode).toBe(200);
+    expect((deactivateResponse.json() as { isActive: boolean }).isActive).toBe(false);
+
+    // OWNER tentando desativar a própria conta -> 403
+    const selfDeactivate = await testApp.inject({
+      method: "PATCH",
+      url: `/collaborators/${ownerCompanyId}/status`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { isActive: false },
+    });
+    expect(selfDeactivate.statusCode).toBe(403);
+
+    // Outro OWNER tentando alterar colaborador de outro tenant -> 404
+    const crossTenantPatch = await testApp.inject({
+      method: "PATCH",
+      url: `/collaborators/${createdABody.id}/status`,
+      headers: { authorization: `Bearer ${otherOwnerToken}` },
+      payload: { isActive: true },
+    });
+    expect(crossTenantPatch.statusCode).toBe(404);
+
+    // Payload inválido -> 400
+    const invalidPatch = await testApp.inject({
+      method: "PATCH",
+      url: `/collaborators/${createdABody.id}/status`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { isActive: "yes" },
+    });
+    expect(invalidPatch.statusCode).toBe(400);
 
     await testApp.close();
   });

@@ -13,6 +13,7 @@ interface StoredCompany {
   phone: string;
   email: string;
   passwordHash: string;
+  timezone?: string;
   isActive: boolean;
 }
 
@@ -69,6 +70,7 @@ export class InMemoryAuthIdentityRepository implements AuthIdentityRepository {
       phone: record.phone,
       email: record.email,
       passwordHash: record.passwordHash,
+      timezone: record.timezone ?? "America/Sao_Paulo",
       isActive: record.isActive,
     });
   }
@@ -81,6 +83,7 @@ export class InMemoryAuthIdentityRepository implements AuthIdentityRepository {
         id: company.id,
         companyId: company.id,
         companyName: company.companyName,
+        companyTimezone: company.timezone ?? "America/Sao_Paulo",
         name: company.name,
         phone: company.phone,
         email: company.email,
@@ -104,6 +107,7 @@ export class InMemoryAuthIdentityRepository implements AuthIdentityRepository {
       id: collaborator.id,
       companyId: collaborator.companyId,
       companyName: parentCompany.companyName,
+      companyTimezone: parentCompany.timezone ?? "America/Sao_Paulo",
       companyIsActive: parentCompany.isActive,
       name: collaborator.name,
       phone: collaborator.phone,
@@ -126,6 +130,7 @@ export class InMemoryAuthIdentityRepository implements AuthIdentityRepository {
       id: company.id,
       companyId: company.id,
       companyName: company.companyName,
+      companyTimezone: company.timezone ?? "America/Sao_Paulo",
       name: company.name,
       phone: company.phone,
       email: company.email,
@@ -155,6 +160,7 @@ export class InMemoryAuthIdentityRepository implements AuthIdentityRepository {
       id: collaborator.id,
       companyId: collaborator.companyId,
       companyName: parentCompany.companyName,
+      companyTimezone: parentCompany.timezone ?? "America/Sao_Paulo",
       companyIsActive: parentCompany.isActive,
       name: collaborator.name,
       phone: collaborator.phone,

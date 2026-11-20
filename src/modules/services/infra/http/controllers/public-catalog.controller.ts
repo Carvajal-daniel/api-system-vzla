@@ -9,8 +9,8 @@ export class PublicCatalogController {
 
   async listByCompany(request: FastifyRequest, reply: FastifyReply) {
     const { companyId } = publicCompanyIdParamSchema.parse(request.params);
-    const services = await this.listPublicCompanyCatalogUseCase.execute(companyId);
+    const catalog = await this.listPublicCompanyCatalogUseCase.execute(companyId);
 
-    return reply.status(200).send({ services });
+    return reply.status(200).send(catalog);
   }
 }

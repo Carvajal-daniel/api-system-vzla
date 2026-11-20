@@ -236,6 +236,7 @@ describe("Auth Use Cases", () => {
       });
       expect(ownerProfile.role).toBe("OWNER");
       expect(ownerProfile.company.companyName).toBe("Barbearia Elite");
+      expect(ownerProfile.company.timezone).toBe("America/Sao_Paulo");
 
       const collaboratorProfile = await getProfileUseCase.execute({
         role: "COLLABORATOR",
@@ -243,6 +244,7 @@ describe("Auth Use Cases", () => {
         companyId,
       });
       expect(collaboratorProfile.role).toBe("COLLABORATOR");
+      expect(collaboratorProfile.company.timezone).toBe("America/Sao_Paulo");
       if (collaboratorProfile.role === "COLLABORATOR") {
         expect(collaboratorProfile.specialty).toBe("Corte");
         expect(collaboratorProfile.commissionPercentage).toBe(50);

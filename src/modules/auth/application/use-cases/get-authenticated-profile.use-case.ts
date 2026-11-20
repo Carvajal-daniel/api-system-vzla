@@ -25,6 +25,7 @@ export class GetAuthenticatedProfileUseCase {
         company: {
           id: owner.companyId,
           companyName: owner.companyName,
+          timezone: owner.companyTimezone,
           isActive: owner.isActive,
         },
       };
@@ -52,6 +53,7 @@ export class GetAuthenticatedProfileUseCase {
       company: {
         id: collaborator.companyId,
         companyName: collaborator.companyName,
+        timezone: collaborator.companyTimezone,
         isActive: collaborator.companyIsActive,
       },
     };

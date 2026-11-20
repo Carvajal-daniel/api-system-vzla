@@ -3,6 +3,7 @@ export interface AuthOwnerRecord {
   readonly id: string;
   readonly companyId: string;
   readonly companyName: string;
+  readonly companyTimezone: string;
   readonly name: string;
   readonly phone: string;
   readonly email: string;
@@ -15,6 +16,7 @@ export interface AuthCollaboratorRecord {
   readonly id: string;
   readonly companyId: string;
   readonly companyName: string;
+  readonly companyTimezone: string;
   readonly companyIsActive: boolean;
   readonly name: string;
   readonly phone: string;

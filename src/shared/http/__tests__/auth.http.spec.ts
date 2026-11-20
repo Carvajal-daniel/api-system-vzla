@@ -83,6 +83,7 @@ describe("Auth HTTP Layer (/auth/register, /auth/login, /me, Deactivation & Open
         phone: "+584121234567",
         email: "Owner@Norte.com",
         password: "Secret@123",
+        timezone: "America/Caracas",
       },
     });
 
@@ -110,11 +111,12 @@ describe("Auth HTTP Layer (/auth/register, /auth/login, /me, Deactivation & Open
     const meBody = meResponse.json() as {
       role: string;
       email: string;
-      company: { companyName: string; isActive: boolean };
+      company: { companyName: string; timezone: string; isActive: boolean };
     };
     expect(meBody.role).toBe("OWNER");
     expect(meBody.email).toBe("owner@norte.com");
     expect(meBody.company.companyName).toBe("Barberia Norte");
+    expect(meBody.company.timezone).toBe("America/Caracas");
     expect(meBody.company.isActive).toBe(true);
 
     const duplicateResponse = await testApp.inject({

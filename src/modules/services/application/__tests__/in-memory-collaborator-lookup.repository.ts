@@ -16,6 +16,16 @@ export class InMemoryCollaboratorLookupRepository implements CollaboratorLookupR
     return found ? { ...found } : null;
   }
 
+  async findByIdsInCompany(
+    collaboratorIds: string[],
+    companyId: string,
+  ): Promise<CollaboratorSummary[]> {
+    const idSet = new Set(collaboratorIds);
+    return this.items
+      .filter((item) => item.companyId === companyId && idSet.has(item.id))
+      .map((item) => ({ ...item }));
+  }
+
   async findActiveByIdsInCompany(
     collaboratorIds: string[],
     companyId: string,

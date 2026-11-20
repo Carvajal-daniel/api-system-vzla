@@ -1,9 +1,12 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { CollaboratorEmailAlreadyInError } from "../../../application/errors/collaborator-errors.js";
 import type { CollaboratorEntity } from "../../../domain/entities/collaborator.entity.js";
-import type { CollaboratorsRepository } from "../../../domain/repository/collaborators.repository.interface.js";
+import type {
+  CollaboratorRecord,
+  CollaboratorsRepository,
+} from "../../../domain/repository/collaborators.repository.interface.js";
 import { CollaboratorTable } from "../schema/collaborators-schema.js";
 
 function isUniqueViolationError(error: unknown): boolean {
@@ -64,5 +67,62 @@ export class CollaboratorRepositoryDB implements CollaboratorsRepository {
       }
       throw error;
     }
+  }
+
+  async findAllByCompanyId(companyId: string): Promise<CollaboratorRecord[]> {
+    const rows = await db
+      .select({
+        id: CollaboratorTable.id,
+        companyId: CollaboratorTable.companyId,
+        name: CollaboratorTable.name,
+        email: CollaboratorTable.email,
+        phone: CollaboratorTable.phone,
+        specialty: CollaboratorTable.specialty,
+        commissionPercentage: CollaboratorTable.commissionPercentage,
+        isActive: CollaboratorTable.isActive,
+      })
+      .from(CollaboratorTable)
+      .where(eq(CollaboratorTable.companyId, companyId));
+
+    return rows.map((row) => ({
+      ...row,
+      commissionPercentage: Number(row.commissionPercentage),
+    }));
+  }
+
+  async updateStatusInCompany(
+    collaboratorId: string,
+    companyId: string,
+    isActive: boolean,
+  ): Promise<CollaboratorRecord | null> {
+    const rows = await db
+      .update(CollaboratorTable)
+      .set({ isActive })
+      .where(
+        and(
+          eq(CollaboratorTable.id, collaboratorId),
+          eq(CollaboratorTable.companyId, companyId),
+        ),
+      )
+      .returning({
+        id: CollaboratorTable.id,
+        companyId: CollaboratorTable.companyId,
+        name: CollaboratorTable.name,
+        email: CollaboratorTable.email,
+        phone: CollaboratorTable.phone,
+        specialty: CollaboratorTable.specialty,
+        commissionPercentage: CollaboratorTable.commissionPercentage,
+        isActive: CollaboratorTable.isActive,
+      });
+
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      ...row,
+      commissionPercentage: Number(row.commissionPercentage),
+    };
   }
 }

@@ -1,4 +1,5 @@
 import fastify from "fastify";
+import fastifyCors from "@fastify/cors";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
@@ -7,11 +8,18 @@ import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/route
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
-import { isProduction } from "../config/env.js";
+import { getCorsOrigins, isProduction } from "../config/env.js";
 import { registerErrorHandler } from "./error-handler.js";
 
 const app = fastify({
   logger: true,
+});
+
+// Habilita CORS controlado por variável de ambiente para consumo seguro pelo frontend web.
+app.register(fastifyCors, {
+  origin: getCorsOrigins(),
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 });
 
 registerErrorHandler(app);

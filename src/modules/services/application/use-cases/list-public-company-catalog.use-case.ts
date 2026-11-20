@@ -1,9 +1,11 @@
+import { PublicCompanyNotFoundError } from "../../domain/errors/service-errors.js";
 import type { CollaboratorLookupRepository } from "../../domain/repositories/collaborator-lookup.repository.js";
 import type { CollaboratorServicesRepository } from "../../domain/repositories/collaborator-services.repository.js";
+import type { CompanyLookupRepository } from "../../domain/repositories/company-lookup.repository.js";
 import type { ServicesRepository } from "../../domain/repositories/services.repository.js";
 import type {
   PublicCatalogCollaboratorOutputDTO,
-  PublicCatalogServiceOutputDTO,
+  PublicCompanyCatalogOutputDTO,
 } from "../dtos/service.dtos.js";
 
 export class ListPublicCompanyCatalogUseCase {
@@ -11,13 +13,29 @@ export class ListPublicCompanyCatalogUseCase {
     private readonly servicesRepository: ServicesRepository,
     private readonly collaboratorServicesRepository: CollaboratorServicesRepository,
     private readonly collaboratorLookupRepository: CollaboratorLookupRepository,
+    private readonly companyLookupRepository: CompanyLookupRepository,
   ) {}
 
-  async execute(companyId: string): Promise<PublicCatalogServiceOutputDTO[]> {
+  async execute(companyId: string): Promise<PublicCompanyCatalogOutputDTO> {
+    // Bloqueia exposição de catálogo para empresas inexistentes ou desativadas.
+    const company = await this.companyLookupRepository.findById(companyId);
+    if (!company || !company.isActive) {
+      throw new PublicCompanyNotFoundError();
+    }
+
+    const companyInfo = {
+      id: company.id,
+      companyName: company.companyName,
+      timezone: company.timezone,
+    };
+
     const activeServices = await this.servicesRepository.findActiveByCompany(companyId);
 
     if (activeServices.length === 0) {
-      return [];
+      return {
+        company: companyInfo,
+        services: [],
+      };
     }
 
     const serviceIds = activeServices.map((service) => service.id);
@@ -54,13 +72,16 @@ export class ListPublicCompanyCatalogUseCase {
       collaboratorsByService.set(link.serviceId, list);
     }
 
-    return activeServices.map((service) => ({
-      id: service.id,
-      name: service.name,
-      description: service.description,
-      durationMinutes: service.durationMinutes,
-      priceInCents: service.priceInCents,
-      collaborators: collaboratorsByService.get(service.id) ?? [],
-    }));
+    return {
+      company: companyInfo,
+      services: activeServices.map((service) => ({
+        id: service.id,
+        name: service.name,
+        description: service.description,
+        durationMinutes: service.durationMinutes,
+        priceInCents: service.priceInCents,
+        collaborators: collaboratorsByService.get(service.id) ?? [],
+      })),
+    };
   }
 }

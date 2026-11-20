@@ -17,3 +17,21 @@ export function getJwtExpiresIn(): string {
 export function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
+
+export function getCorsOrigins(): string[] | false {
+  // Permite múltiplas origens separadas por vírgula em CORS_ORIGIN; fora de produção usa localhost do Vite como padrão seguro.
+  const raw = process.env.CORS_ORIGIN?.trim();
+
+  if (raw) {
+    const origins = raw
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+
+    if (origins.length > 0) {
+      return origins;
+    }
+  }
+
+  return isProduction() ? false : ["http://localhost:5173"];
+}

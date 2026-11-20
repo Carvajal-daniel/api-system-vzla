@@ -41,6 +41,7 @@ export interface OwnerProfileDTO {
   readonly company: {
     readonly id: string;
     readonly companyName: string;
+    readonly timezone: string;
     readonly isActive: boolean;
   };
 }
@@ -58,6 +59,7 @@ export interface CollaboratorProfileDTO {
   readonly company: {
     readonly id: string;
     readonly companyName: string;
+    readonly timezone: string;
     readonly isActive: boolean;
   };
 }
