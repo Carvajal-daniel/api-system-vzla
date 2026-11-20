@@ -1,0 +1,741 @@
+openapi: 3.1.0
+info:
+  title: SaaS Barberías y Salones API — Servicios, Horarios y Comisiones (Etapa 1)
+  version: 1.0.0
+  description: >
+    Contrato HTTP para la gestión de servicios, vinculación de colaboradores con comisiones,
+    configuración de días y horarios de trabajo, vista de solo lectura para colaboradores
+    y catálogo público para clientes finales.
+
+servers:
+  - url: http://localhost:3908
+    description: Servidor local de desarrollo
+
+tags:
+  - name: Services (Owner)
+    description: Gestión del catálogo de servicios por el Dueño (OWNER)
+  - name: Commissions & Links (Owner)
+    description: Vinculación de colaboradores a servicios y gestión de comisiones (OWNER)
+  - name: Work Schedules (Owner)
+    description: Configuración semanal de días y horarios de trabajo por colaborador (OWNER)
+  - name: Collaborator Self-Service
+    description: Consultas de solo lectura para el Colaborador autenticado (COLLABORATOR)
+  - name: Public Catalog
+    description: Consulta pública sin autenticación para Clientes Finales (CLIENT)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT firmado con JWT_SECRET. Claims requeridos: `sub` (UUID del usuario/colaborador),
+        `companyId` (UUID de la empresa) y `role` (`OWNER` o `COLLABORATOR`).
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: "Ya existe un servicio con ese nombre en esta empresa."
+
+    ServiceResponse:
+      type: object
+      required: [id, companyId, name, description, durationMinutes, priceInCents, active, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        companyId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Corte Clásico"
+        description:
+          type: [string, "null"]
+          example: "Corte tradicional con tijera y máquina"
+        durationMinutes:
+          type: integer
+          minimum: 1
+          example: 45
+        priceInCents:
+          type: integer
+          minimum: 0
+          example: 3500
+        active:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateServiceRequest:
+      type: object
+      required: [name, durationMinutes, priceInCents]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, "null"]
+          maxLength: 500
+        durationMinutes:
+          type: integer
+          minimum: 1
+        priceInCents:
+          type: integer
+          minimum: 0
+
+    UpdateServiceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, "null"]
+          maxLength: 500
+        durationMinutes:
+          type: integer
+          minimum: 1
+        priceInCents:
+          type: integer
+          minimum: 0
+
+    UpdateServiceStatusRequest:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+
+    CollaboratorServiceResponse:
+      type: object
+      required: [id, companyId, collaboratorId, serviceId, commissionPercentage, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        companyId:
+          type: string
+          format: uuid
+        collaboratorId:
+          type: string
+          format: uuid
+        serviceId:
+          type: string
+          format: uuid
+        commissionPercentage:
+          type: number
+          minimum: 0
+          maximum: 100
+          example: 40
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LinkCollaboratorServiceRequest:
+      type: object
+      required: [collaboratorId, commissionPercentage]
+      properties:
+        collaboratorId:
+          type: string
+          format: uuid
+        commissionPercentage:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    UpdateCommissionRequest:
+      type: object
+      required: [commissionPercentage]
+      properties:
+        commissionPercentage:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    WorkScheduleDayInput:
+      type: object
+      required: [dayOfWeek, isWorkingDay]
+      properties:
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: "0 = Domingo, 6 = Sábado"
+        isWorkingDay:
+          type: boolean
+        startTime:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          example: "09:00"
+        endTime:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          example: "18:00"
+        breakStart:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          example: "12:00"
+        breakEnd:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          example: "13:00"
+
+    UpsertWorkSchedulesRequest:
+      type: object
+      required: [schedules]
+      properties:
+        schedules:
+          type: array
+          minItems: 1
+          maxItems: 7
+          items:
+            $ref: "#/components/schemas/WorkScheduleDayInput"
+
+    WorkScheduleResponse:
+      type: object
+      required: [id, companyId, collaboratorId, dayOfWeek, isWorkingDay, startTime, endTime, breakStart, breakEnd]
+      properties:
+        id:
+          type: string
+          format: uuid
+        companyId:
+          type: string
+          format: uuid
+        collaboratorId:
+          type: string
+          format: uuid
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+        isWorkingDay:
+          type: boolean
+        startTime:
+          type: [string, "null"]
+        endTime:
+          type: [string, "null"]
+        breakStart:
+          type: [string, "null"]
+        breakEnd:
+          type: [string, "null"]
+
+    CollaboratorAssignedServiceResponse:
+      type: object
+      required: [serviceId, name, description, durationMinutes, priceInCents, active, commissionPercentage]
+      properties:
+        serviceId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        durationMinutes:
+          type: integer
+        priceInCents:
+          type: integer
+        active:
+          type: boolean
+        commissionPercentage:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    PublicCatalogServiceResponse:
+      type: object
+      required: [id, name, description, durationMinutes, priceInCents, collaborators]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        durationMinutes:
+          type: integer
+        priceInCents:
+          type: integer
+        collaborators:
+          type: array
+          items:
+            type: object
+            required: [id, name, specialty]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              specialty:
+                type: string
+
+paths:
+  /services:
+    post:
+      tags: [Services (Owner)]
+      summary: Crear un nuevo servicio en el catálogo de la empresa
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceRequest"
+      responses:
+        "201":
+          description: Servicio creado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceResponse"
+        "400":
+          description: Datos inválidos (duración <= 0, precio < 0 o nombre vacío)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Ya existe un servicio con ese nombre en la empresa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      tags: [Services (Owner)]
+      summary: Listar todos los servicios de la empresa (activos e inactivos)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Listado de servicios del salón
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceResponse"
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /services/{serviceId}:
+    patch:
+      tags: [Services (Owner)]
+      summary: Editar atributos de un servicio de la empresa
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceRequest"
+      responses:
+        "200":
+          description: Servicio actualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceResponse" }
+        "400":
+          description: Datos inválidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Servicio no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Conflicto de nombre duplicado en la empresa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /services/{serviceId}/status:
+    patch:
+      tags: [Services (Owner)]
+      summary: Desactivar o reactivar un servicio de la empresa
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceStatusRequest"
+      responses:
+        "200":
+          description: Estado actualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Servicio no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /services/{serviceId}/collaborators:
+    post:
+      tags: [Commissions & Links (Owner)]
+      summary: Vincular un colaborador a un servicio con su porcentaje de comisión
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkCollaboratorServiceRequest"
+      responses:
+        "201":
+          description: Colaborador vinculado al servicio
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CollaboratorServiceResponse" }
+        "400":
+          description: Comisión fuera de rango (0..100) o formato inválido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Servicio o colaborador no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: El colaborador ya está vinculado a ese servicio
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /services/{serviceId}/collaborators/{collaboratorId}:
+    patch:
+      tags: [Commissions & Links (Owner)]
+      summary: Actualizar el porcentaje de comisión de un vínculo colaborador-servicio
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: collaboratorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommissionRequest"
+      responses:
+        "200":
+          description: Comisión actualizada para futuros agendamientos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CollaboratorServiceResponse" }
+        "400":
+          description: Comisión fuera de rango (0..100)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Vínculo no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    delete:
+      tags: [Commissions & Links (Owner)]
+      summary: Desvincular un colaborador de un servicio
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: collaboratorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Colaborador desvinculado exitosamente
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Vínculo no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /collaborators/{collaboratorId}/work-schedules:
+    put:
+      tags: [Work Schedules (Owner)]
+      summary: Configurar uno o varios días de trabajo de un colaborador (upsert transaccional)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: collaboratorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertWorkSchedulesRequest"
+      responses:
+        "200":
+          description: Horarios configurados exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedules]
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkScheduleResponse"
+        "400":
+          description: Horarios o intervalos de descanso inválidos o días duplicados
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Colaborador no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      tags: [Work Schedules (Owner)]
+      summary: Consultar los días y horarios de trabajo de un colaborador de la empresa
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: collaboratorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Horarios semanales configurados del colaborador
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedules]
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkScheduleResponse"
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol OWNER)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Colaborador no encontrado en la empresa del OWNER
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /me/services:
+    get:
+      tags: [Collaborator Self-Service]
+      summary: Consultar únicamente los servicios vinculados y comisiones del colaborador autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Servicios asignados al colaborador autenticado con su comisión individual
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CollaboratorAssignedServiceResponse"
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol COLLABORATOR)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /me/work-schedules:
+    get:
+      tags: [Collaborator Self-Service]
+      summary: Consultar los días y horarios de trabajo propios del colaborador autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Horarios semanales del colaborador autenticado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedules]
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkScheduleResponse"
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: Prohibido (requiere rol COLLABORATOR)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /public/companies/{companyId}/services:
+    get:
+      tags: [Public Catalog]
+      summary: Consultar públicamente servicios activos y colaboradores habilitados de un salón
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Catálogo público (solo servicios activos; sin comisiones ni datos internos)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PublicCatalogServiceResponse"
+        "400":
+          description: companyId no es un UUID válido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
