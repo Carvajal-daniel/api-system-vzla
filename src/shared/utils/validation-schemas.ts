@@ -21,7 +21,6 @@ export const registerCollaboratorSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
   phone: phoneSchema,
-  companyId: z.string().uuid("Identificador da empresa inválido."),
   specialty: z.string().trim().min(1, "Especialidade obrigatória."),
   commissionPercentage: z.number().finite(),
 });

@@ -8,9 +8,17 @@ export class RegisterCollaboratorController {
   constructor(private readonly registerUseCase: RegisterCollaboratorUseCase) {}
 
   async handle(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.actor) {
+      return reply.status(401).send({ message: "Authentication required." });
+    }
+
     try {
       const validatedData = registerCollaboratorSchema.parse(request.body);
-      const result = await this.registerUseCase.execute(validatedData);
+      // Deriva o tenant diretamente do token JWT autenticado para impedir criação em empresas de terceiros.
+      const result = await this.registerUseCase.execute({
+        ...validatedData,
+        companyId: request.actor.companyId,
+      });
       return reply.status(201).send(result);
     } catch (error) {
       if (error instanceof ZodError) {

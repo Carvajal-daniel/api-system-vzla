@@ -33,7 +33,7 @@ flowchart LR
 - [x] Hashing y comparación segura de contraseñas con `bcrypt` (`BcryptPasswordHasher`)
 - [x] Middleware JWT + RBAC (`authenticate` / `authorizeRoles`) con validación de estado activo en sesiones
 - [x] Rutas base iniciales de creación (`POST /companies`, `POST /collaborators`)
-- [ ] Proteger `POST /collaborators` con JWT de `OWNER` y documentarlo en Swagger *(mejora recomendada)*
+- [x] Proteger `POST /collaborators` con JWT de `OWNER`, validar unicidad global de correo y documentarlo en Swagger
 
 ### Etapa 1: Catálogo, Comisiones y Horarios *(Completada)*
 - [x] CRUD de servicios por empresa (`POST /services`, `GET /services`, `PATCH /services/:serviceId`, `PATCH /services/:serviceId/status`)
