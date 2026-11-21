@@ -34,6 +34,7 @@ export const AppointmentTable = pgTable(
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("PENDING"),
     cancellationReason: text("cancellation_reason"),
+    notes: text("notes"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     // Preserve the booked service; the commission rate is refreshed when the professional changes.
     serviceNameSnapshot: text("service_name_snapshot").notNull(),

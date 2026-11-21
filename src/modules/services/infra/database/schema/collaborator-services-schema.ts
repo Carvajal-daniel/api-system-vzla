@@ -12,6 +12,10 @@ import { CollaboratorTable } from "../../../../Collaborators/infra/database/sche
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { ServiceTable } from "./services-schema.js";
 
+/**
+ * Tabela de associação N:N entre Colaboradores e Serviços.
+ * Permite definir taxa de comissão customizada por serviço ou recorrer à comissão padrão do profissional.
+ */
 export const CollaboratorServiceTable = pgTable(
   "collaborator_services",
   {
@@ -25,11 +29,18 @@ export const CollaboratorServiceTable = pgTable(
     serviceId: uuid("service_id")
       .notNull()
       .references(() => ServiceTable.id, { onDelete: "cascade" }),
+    // Percentual de comissão original mantido para compatibilidade
     commissionPercentage: numeric("commission_percentage", {
       precision: 5,
       scale: 2,
       mode: "number",
-    }).notNull(),
+    }).notNull().default(0),
+    // Taxa customizada que sobrescreve defaultCommissionRate quando presente
+    customCommissionRate: numeric("custom_commission_rate", {
+      precision: 5,
+      scale: 2,
+      mode: "number",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

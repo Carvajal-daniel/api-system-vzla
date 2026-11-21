@@ -63,6 +63,8 @@ export class GetAuthenticatedProfileUseCase {
           currency: collaborator.companyCurrency ?? "BRL",
         isActive: collaborator.companyIsActive,
         avatarUrl: collaborator.companyAvatarUrl ?? null,
+        operatingDays: collaborator.companyOperatingDays ?? null,
+        operatingSchedule: collaborator.companyOperatingSchedule ?? null,
       },
     };
   }

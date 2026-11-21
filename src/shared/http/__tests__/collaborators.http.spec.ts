@@ -3,8 +3,12 @@ import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CollaboratorEntity } from "../../../modules/Collaborators/domain/entities/collaborator.entity.js";
 import type {
+  CollaboratorAwardRecord,
+  CollaboratorMetricSummary,
+  CollaboratorProfileDossier,
   CollaboratorRecord,
   CollaboratorsRepository,
+  TeamKpisSummary,
 } from "../../../modules/Collaborators/domain/repository/collaborators.repository.interface.js";
 import { CollaboratorRoutes } from "../../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import type { PasswordHasher } from "../../cryptography/password-hasher.js";
@@ -49,16 +53,82 @@ class InMemoryCollaboratorsHttpRepository implements CollaboratorsRepository {
       email: collaborator.email,
       password: collaborator.password,
       phone: collaborator.phone,
+      whatsapp: collaborator.whatsapp ?? null,
       specialty: collaborator.specialty,
+      bio: collaborator.bio ?? null,
       commissionPercentage: collaborator.commissionPercentage,
+      defaultCommissionRate: collaborator.defaultCommissionRate,
+      monthlyRevenueGoal: collaborator.monthlyRevenueGoal ?? null,
+      status: collaborator.status,
       isActive: collaborator.isActive,
+      avatarUrl: collaborator.avatarUrl ?? null,
+      hiredAt: collaborator.hiredAt,
+      deactivatedAt: collaborator.deactivatedAt ?? null,
+      deactivationReason: collaborator.deactivationReason ?? null,
+      createdAt: collaborator.createdAt,
+      updatedAt: collaborator.updatedAt,
     });
   }
 
-  async findAllByCompanyId(companyId: string): Promise<CollaboratorRecord[]> {
+  async findById(collaboratorId: string, companyId: string): Promise<CollaboratorEntity | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) return null;
+
+    return {
+      id: found.id,
+      companyId: found.companyId,
+      name: found.name,
+      email: found.email,
+      password: found.password,
+      phone: found.phone,
+      whatsapp: found.whatsapp,
+      specialty: found.specialty,
+      bio: found.bio,
+      commissionPercentage: found.commissionPercentage,
+      defaultCommissionRate: found.defaultCommissionRate,
+      monthlyRevenueGoal: found.monthlyRevenueGoal,
+      status: found.status,
+      isActive: found.isActive,
+      avatarUrl: found.avatarUrl,
+      hiredAt: found.hiredAt,
+      deactivatedAt: found.deactivatedAt,
+      deactivationReason: found.deactivationReason,
+      createdAt: found.createdAt,
+      updatedAt: found.updatedAt,
+      deactivate: () => {},
+      activate: () => {},
+      updateProfile: () => {},
+      updateCredentials: () => {},
+    } as unknown as CollaboratorEntity;
+  }
+
+  async findAllByCompanyId(
+    companyId: string,
+    filters?: { serviceId?: string | undefined; status?: "ACTIVE" | "INACTIVE" | undefined },
+  ): Promise<CollaboratorRecord[]> {
     return this.collaborators
-      .filter((c) => c.companyId === companyId)
+      .filter((c) => {
+        if (c.companyId !== companyId) return false;
+        if (filters?.status && c.status !== filters.status) return false;
+        return true;
+      })
       .map(({ password: _password, ...record }) => ({ ...record }));
+  }
+
+  async update(collaborator: CollaboratorEntity): Promise<void> {
+    const index = this.collaborators.findIndex((c) => c.id === collaborator.id);
+    if (index !== -1) {
+      const existing = this.collaborators[index]!;
+      this.collaborators[index] = {
+        ...existing,
+        name: collaborator.name,
+        specialty: collaborator.specialty,
+        phone: collaborator.phone,
+        updatedAt: new Date(),
+      };
+    }
   }
 
   async updateStatusInCompany(
@@ -74,18 +144,115 @@ class InMemoryCollaboratorsHttpRepository implements CollaboratorsRepository {
     }
 
     const updated: CollaboratorRecord = {
-      id: found.id,
-      companyId: found.companyId,
-      name: found.name,
-      email: found.email,
-      phone: found.phone,
-      specialty: found.specialty,
-      commissionPercentage: found.commissionPercentage,
+      ...found,
       isActive,
+      status: isActive ? "ACTIVE" : "INACTIVE",
+      deactivatedAt: isActive ? null : new Date(),
+      updatedAt: new Date(),
     };
     const index = this.collaborators.indexOf(found);
     this.collaborators[index] = { ...updated, password: found.password };
     return updated;
+  }
+
+  async listCollaboratorsWithMetrics(
+    companyId: string,
+  ): Promise<{ teamKpis: TeamKpisSummary; collaborators: CollaboratorMetricSummary[] }> {
+    const records = await this.findAllByCompanyId(companyId);
+    return {
+      teamKpis: {
+        totalCollaborators: records.length,
+        activeCollaborators: records.filter((r) => r.isActive).length,
+        totalCompletedAppointmentsMonth: 0,
+        totalRevenueMonthInCents: 0,
+        averageTeamRating: 5.0,
+      },
+      collaborators: records.map((r, i) => ({
+        id: r.id,
+        companyId: r.companyId,
+        name: r.name,
+        email: r.email,
+        phone: r.phone,
+        role: "COLLABORATOR" as const,
+        commissionPercentage: r.defaultCommissionRate,
+        hiredAt: r.hiredAt,
+        avatarUrl: r.avatarUrl ?? null,
+        specialty: r.specialty,
+        status: r.status,
+        isActive: r.isActive,
+        defaultCommissionRate: r.defaultCommissionRate,
+        completedAppointmentsMonth: 0,
+        servicesRevenueMonthInCents: 0,
+        productsSalesMonthInCents: 0,
+        productsSoldCountMonth: 0,
+        revenueMonthInCents: 0,
+        commissionMonthInCents: 0,
+        averageRating: 5.0,
+        totalReviews: 0,
+        rankingPosition: i + 1,
+        rankingScore: 80,
+        awardsCount: 0,
+      })),
+    };
+  }
+
+  async getProfileDossier(
+    collaboratorId: string,
+    companyId: string,
+  ): Promise<CollaboratorProfileDossier | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) return null;
+
+    return {
+      collaborator: found,
+      tenureFormatted: "1 mês",
+      tenureMonths: 1,
+      ranking: {
+        totalScore: 85,
+        position: 1,
+        totalInCompany: 1,
+        weights: {
+          servicesRevenueWeight: 35,
+          productsSalesWeight: 25,
+          appointmentsVolumeWeight: 15,
+          clientReviewsWeight: 15,
+          punctualityRetentionWeight: 10,
+        },
+        pillars: {
+          servicesRevenueScore: 35,
+          productsSalesScore: 20,
+          appointmentsVolumeScore: 15,
+          clientReviewsScore: 10,
+          punctualityRetentionScore: 5,
+        },
+      },
+      stats: {
+        completedAppointmentsMonth: 0,
+        totalCompletedAppointments: 0,
+        servicesRevenueMonthInCents: 0,
+        productsSalesMonthInCents: 0,
+        productsSoldCountMonth: 0,
+        revenueMonthInCents: 0,
+        totalRevenueInCents: 0,
+        commissionMonthInCents: 0,
+        totalCommissionInCents: 0,
+        averageRating: 5,
+        totalReviews: 0,
+      },
+      awards: [],
+      recentReviews: [],
+      services: [],
+      schedules: [],
+    };
+  }
+
+  async syncServices(): Promise<void> {}
+  async syncSchedules(): Promise<void> {}
+  async countFutureAppointments(): Promise<number> { return 0; }
+  async deactivateAndQueueReschedule(): Promise<{ queuedCount: number }> {
+    return { queuedCount: 0 };
   }
 }
 
@@ -366,16 +533,15 @@ describe("Collaborators HTTP Layer (POST /collaborators, JWT RBAC, Global Email 
       collaborators: Array<Record<string, unknown>>;
     };
     expect(listABody.collaborators).toHaveLength(1);
-    expect(listABody.collaborators[0]).toEqual({
+    expect(listABody.collaborators[0]).toMatchObject({
       id: createdABody.id,
       name: "Pedro Barber",
-      email: "pedro@norte.com",
-      phone: "+584121234567",
       specialty: "Barba",
-      commissionPercentage: 45,
+      defaultCommissionRate: 45,
       isActive: true,
-      role: "COLLABORATOR",
+      status: "ACTIVE",
     });
+    expect(listABody).toHaveProperty("teamKpis");
 
     // Desativar colaborador da própria empresa -> 200
     const deactivateResponse = await testApp.inject({

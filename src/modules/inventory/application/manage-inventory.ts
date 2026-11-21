@@ -40,8 +40,15 @@ export class ManageInventory {
 
   record(actor: ActorContext, input: MovementInput) {
     const company = this.company(actor);
+    const collaboratorAllowed =
+      input.movementType === "COLLABORATOR_WITHDRAWAL" || input.movementType === "SALE_OUT";
+    const missingRequiredCollaborator =
+      input.movementType === "COLLABORATOR_WITHDRAWAL" && !input.collaboratorId;
+    const unexpectedCollaborator = !!input.collaboratorId && !collaboratorAllowed;
+
     if ((input.movementType === "SALE_OUT") !== !!input.paymentMethod ||
-        (input.movementType === "COLLABORATOR_WITHDRAWAL") !== !!input.collaboratorId ||
+        missingRequiredCollaborator ||
+        unexpectedCollaborator ||
         (input.movementType === "ADJUSTMENT") !== !!input.direction ||
         (input.postExpense && input.movementType !== "PURCHASE_IN")) {
       throw new CollectionsError("VALIDATION", "INVENTORY_MOVEMENT_FIELDS");

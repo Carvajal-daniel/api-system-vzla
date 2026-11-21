@@ -30,7 +30,7 @@ const itemFilters = z.object({
 const movementFilters = z.object({ itemId: z.uuid().optional(), from: date.optional(), to: date.optional(), page });
 const movementInput = z.object({
   itemId: z.uuid(), movementType: z.enum(movementTypes), quantity, unitCostCents: nonnegative.optional(),
-  unitSaleCents: nonnegative.optional(), collaboratorId: z.uuid().optional(), paymentMethod: z.enum(PAYMENT_METHODS).optional(),
+  unitSaleCents: nonnegative.optional(), collaboratorId: z.uuid().nullish().transform((value) => value ?? undefined), paymentMethod: z.enum(PAYMENT_METHODS).optional(),
   direction: z.enum(["IN", "OUT"]).optional(), postExpense: z.boolean().default(false), notes: text(1000),
   occurredOn: date, requestKey,
 });

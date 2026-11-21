@@ -7,7 +7,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "tsx watch src/shared/http/server.ts",
-    "lint": "eslint src drizzle.config.ts vitest.config.ts"
+    "lint": "eslint src drizzle.config.ts vitest.config.ts",
+    "seed:demo": "tsx src/shared/database/seeds/demo-seed.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +16,8 @@
   "type": "module",
   "dependencies": {
     "@fastify/cors": "^11.4.3",
+    "@fastify/multipart": "^10.1.9",
+    "@fastify/static": "^10.1.12",
     "@fastify/swagger": "^9.9.5",
     "@fastify/swagger-ui": "^6.1.4",
     "bcrypt": "^6.0.0",

@@ -3,18 +3,14 @@ import {
   AppointmentDuringBreakError,
   AppointmentInPastError,
   AppointmentOutsideWorkScheduleError,
+  AppointmentSlotAlignmentError,
   AppointmentTimeConflictError,
 } from "../errors/appointment-errors.js";
+import type { ActiveCompanyContext } from "../repositories/scheduling-context-lookup.repository.js";
 import { TimeRange } from "../value-objects/time-range.vo.js";
-import {
-  assertValidIanaTimeZone,
-  getLocalDateTimeParts,
-  localDateTimeToUtc,
-  parseLocalDateString,
-  parseLocalTimeString,
-} from "./timezone-utils.js";
+import { assertValidIanaTimeZone, getLocalDateTimeParts, localDateTimeToUtc, parseLocalDateString, parseLocalTimeString } from "./timezone-utils.js";
 
-export const DEFAULT_SLOT_STEP_MINUTES = 15;
+export const DEFAULT_SLOT_STEP_MINUTES = 30;
 
 export interface DailyWorkScheduleData {
   dayOfWeek: number;
@@ -25,6 +21,18 @@ export interface DailyWorkScheduleData {
   breakEnd: string | null;
 }
 
+type CompanyHours = { openTime: string; closeTime: string } | null | false;
+
+export function getCompanyHours(company: ActiveCompanyContext, dayOfWeek: number): CompanyHours {
+  if (Array.isArray(company.operatingSchedule)) {
+    const entry = company.operatingSchedule.find((day) => day.dayOfWeek === dayOfWeek);
+    if (entry) return entry.isOpen && entry.openTime && entry.closeTime
+      ? { openTime: entry.openTime, closeTime: entry.closeTime } : false;
+  }
+  if (company.operatingDays && !company.operatingDays.split(",").some((day) => day.trim() === String(dayOfWeek))) return false;
+  return null;
+}
+
 export interface CalculatedAvailabilitySlot {
   startsAt: Date;
   endsAt: Date;
@@ -32,255 +40,87 @@ export interface CalculatedAvailabilitySlot {
   collaboratorName: string;
 }
 
-export interface CalculateCollaboratorSlotsInput {
-  date: string; // YYYY-MM-DD no fuso da empresa
+interface SlotContext {
   timezone: string;
   serviceDurationMinutes: number;
-  slotStepMinutes?: number;
-  now: Date;
-  collaborator: {
-    id: string;
-    name: string;
-  };
-  workSchedule: DailyWorkScheduleData | null;
-  companyOperatingHours?: { openTime: string; closeTime: string } | null;
-  blocks: readonly TimeRange[];
-  activeAppointments: readonly TimeRange[];
-}
-
-export interface ValidateSlotAvailabilityInput {
-  startsAt: Date;
-  serviceDurationMinutes: number;
-  timezone: string;
   now: Date;
   workSchedule: DailyWorkScheduleData | null;
+  companyOperatingHours?: CompanyHours;
   blocks: readonly TimeRange[];
   activeAppointments?: readonly TimeRange[];
 }
 
+export interface CalculateCollaboratorSlotsInput extends SlotContext {
+  date: string;
+  collaborator: { id: string; name: string };
+}
+
+export interface ValidateSlotAvailabilityInput extends SlotContext {
+  startsAt: Date;
+}
+
+function minutes(time: string) {
+  const { hour, minute } = parseLocalTimeString(time);
+  return hour * 60 + minute;
+}
+
+function workingBounds(schedule: DailyWorkScheduleData | null, hours: CompanyHours = null) {
+  if (!schedule?.isWorkingDay || !schedule.startTime || !schedule.endTime || hours === false) return null;
+  const start = Math.max(minutes(schedule.startTime), hours ? minutes(hours.openTime) : 0);
+  const end = Math.min(minutes(schedule.endTime), hours ? minutes(hours.closeTime) : 1440);
+  if (start >= end) return null;
+  return { start, end, pause: schedule.breakStart && schedule.breakEnd
+    ? { start: minutes(schedule.breakStart), end: minutes(schedule.breakEnd) } : null };
+}
+
 export class AvailabilityCalculator {
-  /**
-   * Calcula os horários disponíveis para um colaborador em uma data local,
-   * cruzando expediente, descanso, bloqueios (individuais/globais), agendamentos ativos e instante atual.
-   */
-  static calculateSlotsForCollaborator(
-    input: CalculateCollaboratorSlotsInput,
-  ): CalculatedAvailabilitySlot[] {
-    const validTz = assertValidIanaTimeZone(input.timezone);
+  static calculateSlotsForCollaborator(input: CalculateCollaboratorSlotsInput): CalculatedAvailabilitySlot[] {
+    const timezone = assertValidIanaTimeZone(input.timezone);
     const { year, month, day } = parseLocalDateString(input.date);
-    const stepMinutes = input.slotStepMinutes ?? DEFAULT_SLOT_STEP_MINUTES;
-    const durationMs = input.serviceDurationMinutes * 60_000;
-    const stepMs = stepMinutes * 60_000;
+    const bounds = workingBounds(input.workSchedule, input.companyOperatingHours);
+    if (!bounds) return [];
 
-    const schedule = input.workSchedule;
-    if (
-      !schedule ||
-      !schedule.isWorkingDay ||
-      !schedule.startTime ||
-      !schedule.endTime
-    ) {
-      return [];
-    }
-
-    let workStart = parseLocalTimeString(schedule.startTime);
-    let workEnd = parseLocalTimeString(schedule.endTime);
-
-    // Se a barbearia/salão definiu horário de funcionamento para hoje, intersecta os limites
-    if (input.companyOperatingHours) {
-      const compOpen = parseLocalTimeString(input.companyOperatingHours.openTime);
-      const compClose = parseLocalTimeString(input.companyOperatingHours.closeTime);
-
-      const compOpenMinutes = compOpen.hour * 60 + compOpen.minute;
-      const compCloseMinutes = compClose.hour * 60 + compClose.minute;
-      const workStartMinutes = workStart.hour * 60 + workStart.minute;
-      const workEndMinutes = workEnd.hour * 60 + workEnd.minute;
-
-      const effectiveStartMinutes = Math.max(workStartMinutes, compOpenMinutes);
-      const effectiveEndMinutes = Math.min(workEndMinutes, compCloseMinutes);
-
-      if (effectiveStartMinutes >= effectiveEndMinutes) {
-        return [];
-      }
-
-      workStart = {
-        hour: Math.floor(effectiveStartMinutes / 60),
-        minute: effectiveStartMinutes % 60,
-      };
-      workEnd = {
-        hour: Math.floor(effectiveEndMinutes / 60),
-        minute: effectiveEndMinutes % 60,
-      };
-    }
-
-    const windows: TimeRange[] = [];
-
-    if (schedule.breakStart && schedule.breakEnd) {
-      const breakStart = parseLocalTimeString(schedule.breakStart);
-      const breakEnd = parseLocalTimeString(schedule.breakEnd);
-
-      windows.push(
-        TimeRange.create(
-          localDateTimeToUtc(year, month, day, workStart.hour, workStart.minute, validTz),
-          localDateTimeToUtc(year, month, day, breakStart.hour, breakStart.minute, validTz),
-        ),
-      );
-      windows.push(
-        TimeRange.create(
-          localDateTimeToUtc(year, month, day, breakEnd.hour, breakEnd.minute, validTz),
-          localDateTimeToUtc(year, month, day, workEnd.hour, workEnd.minute, validTz),
-        ),
-      );
-    } else {
-      windows.push(
-        TimeRange.create(
-          localDateTimeToUtc(year, month, day, workStart.hour, workStart.minute, validTz),
-          localDateTimeToUtc(year, month, day, workEnd.hour, workEnd.minute, validTz),
-        ),
-      );
-    }
-
-    const unavailableRanges: readonly TimeRange[] = [
-      ...input.blocks,
-      ...input.activeAppointments,
-    ];
-
+    const instant = (minute: number) => localDateTimeToUtc(year, month, day, Math.floor(minute / 60), minute % 60, timezone);
+    const end = instant(bounds.end);
+    const pause = bounds.pause ? TimeRange.create(instant(bounds.pause.start), instant(bounds.pause.end)) : null;
+    const step = DEFAULT_SLOT_STEP_MINUTES;
+    const unavailable = [...input.blocks, ...(input.activeAppointments ?? [])];
     const slots: CalculatedAvailabilitySlot[] = [];
 
-    for (const window of windows) {
-      let cursorMs = window.startsAt.getTime();
-      const windowEndMs = window.endsAt.getTime();
-
-      while (cursorMs + durationMs <= windowEndMs) {
-        if (cursorMs > input.now.getTime()) {
-          const candidate = TimeRange.create(
-            new Date(cursorMs),
-            new Date(cursorMs + durationMs),
-          );
-
-          const hasConflict = unavailableRanges.some((busy) =>
-            busy.overlaps(candidate),
-          );
-
-          if (!hasConflict) {
-            slots.push({
-              startsAt: candidate.startsAt,
-              endsAt: candidate.endsAt,
-              collaboratorId: input.collaborator.id,
-              collaboratorName: input.collaborator.name,
-            });
-          }
-        }
-
-        cursorMs += stepMs;
-      }
+    for (let minute = Math.ceil(bounds.start / step) * step; minute < bounds.end; minute += step) {
+      const startsAt = instant(minute);
+      const local = getLocalDateTimeParts(startsAt, timezone);
+      if (local.dateString !== input.date || local.minutesFromMidnight !== minute || startsAt <= input.now) continue;
+      const endsAt = new Date(startsAt.getTime() + input.serviceDurationMinutes * 60_000);
+      if (endsAt > end) continue;
+      const candidate = TimeRange.create(startsAt, endsAt);
+      if (pause?.overlaps(candidate) || unavailable.some((busy) => busy.overlaps(candidate))) continue;
+      slots.push({ startsAt, endsAt, collaboratorId: input.collaborator.id, collaboratorName: input.collaborator.name });
     }
-
     return slots;
   }
 
-  /**
-   * Valida integralmente se um intervalo [startsAt, startsAt + duration) é reservável,
-   * sem depender de consulta prévia ao endpoint /availability.
-   */
   static validateSlotAvailability(input: ValidateSlotAvailabilityInput): TimeRange {
-    const validTz = assertValidIanaTimeZone(input.timezone);
-    const derivedEndsAt = new Date(
-      input.startsAt.getTime() + input.serviceDurationMinutes * 60_000,
-    );
-    const candidate = TimeRange.create(input.startsAt, derivedEndsAt);
+    const timezone = assertValidIanaTimeZone(input.timezone);
+    const startsAt = input.startsAt;
+    const endsAt = new Date(startsAt.getTime() + input.serviceDurationMinutes * 60_000);
+    const candidate = TimeRange.create(startsAt, endsAt);
+    if (startsAt <= input.now) throw new AppointmentInPastError();
 
-    if (candidate.startsAt.getTime() <= input.now.getTime()) {
-      throw new AppointmentInPastError();
+    const start = getLocalDateTimeParts(startsAt, timezone);
+    const end = getLocalDateTimeParts(endsAt, timezone);
+    if (start.minute % DEFAULT_SLOT_STEP_MINUTES !== 0 || start.second !== 0 || startsAt.getMilliseconds() !== 0) {
+      throw new AppointmentSlotAlignmentError();
     }
-
-    const startLocal = getLocalDateTimeParts(candidate.startsAt, validTz);
-    const endLocal = getLocalDateTimeParts(candidate.endsAt, validTz);
-
-    // A grade semanal atual não cruza meia-noite local dentro de um mesmo registro diário.
-    if (startLocal.dateString !== endLocal.dateString) {
-      throw new AppointmentOutsideWorkScheduleError();
+    const bounds = workingBounds(input.workSchedule, input.companyOperatingHours);
+    const instant = (minute: number) => localDateTimeToUtc(start.year, start.month, start.day, Math.floor(minute / 60), minute % 60, timezone);
+    if (!bounds || start.dateString !== end.dateString || input.workSchedule?.dayOfWeek !== start.dayOfWeek ||
+        startsAt < instant(bounds.start) || endsAt > instant(bounds.end)) throw new AppointmentOutsideWorkScheduleError();
+    if (bounds.pause && candidate.overlaps(TimeRange.create(instant(bounds.pause.start), instant(bounds.pause.end)))) {
+      throw new AppointmentDuringBreakError();
     }
-
-    const schedule = input.workSchedule;
-    if (
-      !schedule ||
-      !schedule.isWorkingDay ||
-      schedule.dayOfWeek !== startLocal.dayOfWeek ||
-      !schedule.startTime ||
-      !schedule.endTime
-    ) {
-      throw new AppointmentOutsideWorkScheduleError();
-    }
-
-    const workStart = parseLocalTimeString(schedule.startTime);
-    const workEnd = parseLocalTimeString(schedule.endTime);
-
-    const workStartUtc = localDateTimeToUtc(
-      startLocal.year,
-      startLocal.month,
-      startLocal.day,
-      workStart.hour,
-      workStart.minute,
-      validTz,
-    );
-    const workEndUtc = localDateTimeToUtc(
-      startLocal.year,
-      startLocal.month,
-      startLocal.day,
-      workEnd.hour,
-      workEnd.minute,
-      validTz,
-    );
-
-    if (
-      candidate.startsAt.getTime() < workStartUtc.getTime() ||
-      candidate.endsAt.getTime() > workEndUtc.getTime()
-    ) {
-      throw new AppointmentOutsideWorkScheduleError();
-    }
-
-    if (schedule.breakStart && schedule.breakEnd) {
-      const breakStart = parseLocalTimeString(schedule.breakStart);
-      const breakEnd = parseLocalTimeString(schedule.breakEnd);
-
-      const breakRange = TimeRange.create(
-        localDateTimeToUtc(
-          startLocal.year,
-          startLocal.month,
-          startLocal.day,
-          breakStart.hour,
-          breakStart.minute,
-          validTz,
-        ),
-        localDateTimeToUtc(
-          startLocal.year,
-          startLocal.month,
-          startLocal.day,
-          breakEnd.hour,
-          breakEnd.minute,
-          validTz,
-        ),
-      );
-
-      if (candidate.overlaps(breakRange)) {
-        throw new AppointmentDuringBreakError();
-      }
-    }
-
-    const isBlocked = input.blocks.some((block) => block.overlaps(candidate));
-    if (isBlocked) {
-      throw new AppointmentBlockedError();
-    }
-
-    if (input.activeAppointments) {
-      const hasAppointmentConflict = input.activeAppointments.some((existing) =>
-        existing.overlaps(candidate),
-      );
-      if (hasAppointmentConflict) {
-        throw new AppointmentTimeConflictError();
-      }
-    }
-
+    if (input.blocks.some((block) => block.overlaps(candidate))) throw new AppointmentBlockedError();
+    if (input.activeAppointments?.some((existing) => existing.overlaps(candidate))) throw new AppointmentTimeConflictError();
     return candidate;
   }
 }

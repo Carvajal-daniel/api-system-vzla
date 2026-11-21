@@ -46,7 +46,13 @@ export class InvalidAppointmentStatusTransitionError extends DomainError {
 
 export class AppointmentCompletionTooEarlyError extends DomainError {
   constructor() {
-    super("Cannot complete an appointment before its scheduled date and time.", "VALIDATION");
+    super("Cannot complete an appointment before it ends.", "VALIDATION");
+  }
+}
+
+export class AppointmentSlotAlignmentError extends DomainError {
+  constructor() {
+    super("Appointment must start on a 30-minute boundary.", "VALIDATION");
   }
 }
 

@@ -30,6 +30,7 @@ function mapRowToEntity(
     endsAt: row.endsAt,
     status: row.status as AppointmentStatusValue,
     cancellationReason: row.cancellationReason,
+    notes: row.notes,
     serviceNameSnapshot: row.serviceNameSnapshot,
     servicePriceInCentsSnapshot: row.servicePriceInCentsSnapshot,
     serviceDurationMinutesSnapshot: row.serviceDurationMinutesSnapshot,
@@ -76,6 +77,7 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
         endsAt: appointment.endsAt,
         status: appointment.status,
         cancellationReason: appointment.cancellationReason,
+        notes: appointment.notes,
         serviceNameSnapshot: appointment.serviceNameSnapshot,
         servicePriceInCentsSnapshot: appointment.servicePriceInCentsSnapshot,
         serviceDurationMinutesSnapshot:

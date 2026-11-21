@@ -22,6 +22,7 @@ export interface AppointmentProps {
   endsAt: Date;
   status: AppointmentStatusValue;
   cancellationReason: string | null;
+  notes?: string | null;
   serviceNameSnapshot: string;
   servicePriceInCentsSnapshot: number;
   serviceDurationMinutesSnapshot: number;
@@ -38,6 +39,7 @@ export interface CreateAppointmentInput {
   clientPhone: string;
   startsAt: Date;
   initialStatus?: InitialAppointmentStatusValue;
+  notes?: string | undefined;
   serviceNameSnapshot: string;
   servicePriceInCentsSnapshot: number;
   serviceDurationMinutesSnapshot: number;
@@ -86,6 +88,7 @@ export class Appointment {
       endsAt: timeRange.endsAt,
       status: initialStatus.value,
       cancellationReason: null,
+      notes: input.notes?.trim() || null,
       serviceNameSnapshot: normalizedServiceName,
       servicePriceInCentsSnapshot: input.servicePriceInCentsSnapshot,
       serviceDurationMinutesSnapshot: input.serviceDurationMinutesSnapshot,
@@ -184,6 +187,10 @@ export class Appointment {
 
   get clientPhone(): string {
     return this.props.clientPhone;
+  }
+
+  get notes(): string | null {
+    return this.props.notes ?? null;
   }
 
   get startsAt(): Date {

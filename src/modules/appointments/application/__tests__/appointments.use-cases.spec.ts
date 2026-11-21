@@ -254,7 +254,7 @@ describe("Appointments & Availability Use Cases", () => {
         companyId: "company-a",
         serviceId: "service-cut",
         collaboratorId: "collab-a1",
-        startsAt: localDateTimeToUtc(2026, 11, 25, 10, 15, tzBrazil),
+        startsAt: localDateTimeToUtc(2026, 11, 25, 10, 30, tzBrazil),
         clientName: "Cliente",
         clientPhone: "+5511987654321",
         now,
@@ -345,7 +345,7 @@ describe("Appointments & Availability Use Cases", () => {
       localDateTimeToUtc(2026, 11, 25, 9, 30, tzBrazil).toISOString(),
     ]);
 
-    // Cancelar libera 09:00 e 09:15 imediatamente
+    // Cancelar libera o slot de 09:00 imediatamente.
     await updateStatus.execute({
       actor: collabA2,
       appointmentId: created.id,
@@ -362,7 +362,6 @@ describe("Appointments & Availability Use Cases", () => {
     });
     expect(afterCancel.slots.map((s) => s.startsAt)).toEqual([
       localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil).toISOString(),
-      localDateTimeToUtc(2026, 11, 25, 9, 15, tzBrazil).toISOString(),
       localDateTimeToUtc(2026, 11, 25, 9, 30, tzBrazil).toISOString(),
     ]);
 
@@ -407,18 +406,18 @@ describe("Appointments & Availability Use Cases", () => {
       }),
     ).rejects.toThrow(AppointmentNotFoundError);
 
-    // Reprogramação parcial de 09:00-09:30 para 09:15-09:45 exclui o próprio ID do chequeo de conflito
+    // Reagendar para o próprio horário deve ignorar o ID no conflito.
     const rescheduled = await rescheduleAppointment.execute({
       actor: ownerA,
       appointmentId: created.id,
-      startsAt: localDateTimeToUtc(2026, 11, 25, 9, 15, tzBrazil),
+      startsAt: localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil),
       now,
     });
     expect(rescheduled.startsAt).toBe(
-      localDateTimeToUtc(2026, 11, 25, 9, 15, tzBrazil).toISOString(),
+      localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil).toISOString(),
     );
     expect(rescheduled.endsAt).toBe(
-      localDateTimeToUtc(2026, 11, 25, 9, 45, tzBrazil).toISOString(),
+      localDateTimeToUtc(2026, 11, 25, 9, 30, tzBrazil).toISOString(),
     );
 
     // Colaborador não pode reprogramar
@@ -444,10 +443,17 @@ describe("Appointments & Availability Use Cases", () => {
       appointmentId: created.id,
       status: "COMPLETED",
       now: new Date(Date.parse(rescheduled.startsAt) - 1),
-    })).rejects.toThrow("Cannot complete an appointment before its scheduled date and time.");
+    })).rejects.toThrow("Cannot complete an appointment before it ends.");
+
+    await expect(updateStatus.execute({
+      actor: collabA1,
+      appointmentId: created.id,
+      status: "COMPLETED",
+      now: new Date(Date.parse(rescheduled.endsAt) - 1),
+    })).rejects.toThrow("Cannot complete an appointment before it ends.");
 
     const completed = await updateStatus.execute({
-      now: new Date(rescheduled.startsAt),
+      now: new Date(rescheduled.endsAt),
       actor: collabA1,
       appointmentId: created.id,
       status: "COMPLETED",
@@ -461,5 +467,46 @@ describe("Appointments & Availability Use Cases", () => {
         status: "CANCELED",
       }),
     ).rejects.toThrow(InvalidAppointmentStatusTransitionError);
+  });
+
+  it("permite que chamadas com actorSource WHATSAPP_AI criem, reagendem e atualizem agendamentos", async () => {
+    // Criação via WhatsApp AI simulando ator do sistema
+    const aiCreated = await createAppointment.executeInternal({
+      actor: ownerA,
+      actorSource: "WHATSAPP_AI",
+      serviceId: "service-cut",
+      collaboratorId: "collab-a1",
+      startsAt: localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil),
+      clientName: "Cliente WhatsApp",
+      clientPhone: "+5511999998888",
+      notes: "Agendado via IA WhatsApp",
+      now,
+    });
+    expect(aiCreated.id).toBeDefined();
+    expect(aiCreated.clientName).toBe("Cliente WhatsApp");
+
+    // Reagendamento via WhatsApp AI
+    const aiRescheduled = await rescheduleAppointment.execute({
+      actor: collabA1, // Mesmo que o contexto seja não-owner, actorSource WHATSAPP_AI é autorizado
+      actorSource: "WHATSAPP_AI",
+      appointmentId: aiCreated.id,
+      startsAt: localDateTimeToUtc(2026, 11, 25, 9, 30, tzBrazil),
+      now,
+    });
+    expect(aiRescheduled.startsAt).toBe(
+      localDateTimeToUtc(2026, 11, 25, 9, 30, tzBrazil).toISOString(),
+    );
+
+    // Cancelamento via WhatsApp AI
+    const aiCanceled = await updateStatus.execute({
+      actor: collabA2, // Outro colaborador, mas com WHATSAPP_AI
+      actorSource: "WHATSAPP_AI",
+      appointmentId: aiCreated.id,
+      status: "CANCELED",
+      cancellationReason: "Cancelado pelo cliente via WhatsApp",
+      now,
+    });
+    expect(aiCanceled.status).toBe("CANCELED");
+    expect(aiCanceled.cancellationReason).toBe("Cancelado pelo cliente via WhatsApp");
   });
 });

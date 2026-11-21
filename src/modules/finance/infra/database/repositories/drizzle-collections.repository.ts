@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { AppointmentTable } from "../../../../appointments/infra/database/schema/appointments-schema.js";
@@ -6,7 +6,7 @@ import type { AppointmentStatusValue } from "../../../../appointments/domain/val
 import {
   collectionErrors, type AppointmentCollections, type CollectionsRepository,
 } from "../../../application/collections.use-cases.js";
-import { CollectionsError, type Receipt, type Receivable } from "../../../domain/collections.js";
+import { appointmentBalance, CollectionsError, type Receipt, type Receivable } from "../../../domain/collections.js";
 import { listCommissionDeductions } from "./commission-deductions.js";
 import { FinancialDocumentTable, ReceiptTable } from "../schema/collections-schema.js";
 
@@ -34,17 +34,17 @@ const appointmentProjection = {
   document: FinancialDocumentTable,
 };
 
-function getAppointment(query: Query, companyId: string, appointmentId: string) {
+function getAppointments(query: Query, companyId: string, appointmentIds: string[]) {
   return query.select(appointmentProjection).from(AppointmentTable)
     .innerJoin(CompanyTable, eq(CompanyTable.id, AppointmentTable.companyId))
     .leftJoin(FinancialDocumentTable, and(
       eq(FinancialDocumentTable.companyId, AppointmentTable.companyId),
       eq(FinancialDocumentTable.appointmentId, AppointmentTable.id),
     ))
-    .where(and(eq(AppointmentTable.companyId, companyId), eq(AppointmentTable.id, appointmentId)));
+    .where(and(eq(AppointmentTable.companyId, companyId), inArray(AppointmentTable.id, appointmentIds)));
 }
 
-function toReceivable(row: Awaited<ReturnType<typeof getAppointment>>[number]): Receivable {
+function toReceivable(row: Awaited<ReturnType<typeof getAppointments>>[number]): Receivable {
   const historical = row.status === "COMPLETED" && row.historyDate < row.openedOn;
   return {
     appointmentId: row.id,
@@ -69,9 +69,31 @@ async function listForDocument(query: Query, companyId: string, documentId: stri
 }
 
 export class DrizzleCollectionsRepository implements CollectionsRepository {
+  async listAppointmentBalances(companyId: string, ids: string[]) {
+    return db.transaction(async (tx) => {
+      const appointments = await getAppointments(tx, companyId, ids);
+      const documentIds = appointments.flatMap(({ document }) => document ? [document.id] : []);
+      const receipts = documentIds.length ? await tx.select().from(ReceiptTable).where(and(
+        eq(ReceiptTable.companyId, companyId), inArray(ReceiptTable.documentId, documentIds),
+      )) : [];
+      const byDocument = new Map<string, Receipt[]>();
+      for (const row of receipts) {
+        const list = byDocument.get(row.documentId) ?? [];
+        list.push(asReceipt(row));
+        byDocument.set(row.documentId, list);
+      }
+      return appointments.map((row) => {
+        const balance = appointmentBalance(toReceivable(row), byDocument.get(row.document?.id ?? "") ?? []);
+        const methods = [...new Set(balance.receipts.filter((receipt) => receipt.refundableInCents > 0).map((receipt) => receipt.method))];
+        return { appointmentId: row.id, currency: balance.currency, netInCents: balance.netInCents,
+          collectedInCents: balance.collectedInCents, openInCents: balance.openInCents, canCollect: balance.canCollect, methods };
+      });
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  }
+
   async detail(companyId: string, appointmentId: string) {
     return db.transaction(async (tx) => {
-      const [row] = await getAppointment(tx, companyId, appointmentId);
+      const [row] = await getAppointments(tx, companyId, [appointmentId]);
       if (!row) throw notFound();
       return { receivable: toReceivable(row), receipts: await listForDocument(tx, companyId, row.document?.id) };
     }, { isolationLevel: "repeatable read", accessMode: "read only" });
@@ -105,7 +127,7 @@ export class DrizzleCollectionsRepository implements CollectionsRepository {
       const [appointment] = await tx.select({ id: AppointmentTable.id }).from(AppointmentTable)
         .where(and(eq(AppointmentTable.companyId, companyId), eq(AppointmentTable.id, appointmentId))).for("update");
       if (!appointment) throw notFound();
-      const [row] = await getAppointment(tx, companyId, appointmentId);
+      const [row] = await getAppointments(tx, companyId, [appointmentId]);
       if (!row) throw notFound();
       const receivable = toReceivable(row);
       const receipts = await listForDocument(tx, companyId, row.document?.id);

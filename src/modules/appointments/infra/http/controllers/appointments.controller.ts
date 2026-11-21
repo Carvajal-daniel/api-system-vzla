@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import type { CreateAppointmentUseCase } from "../../../application/use-cases/create-appointment.use-case.js";
 import type { GetAvailabilityUseCase } from "../../../application/use-cases/get-availability.use-case.js";
 import type { ListAppointmentsUseCase } from "../../../application/use-cases/list-appointments.use-case.js";
@@ -12,6 +13,7 @@ import {
   createPublicAppointmentBodySchema,
   listAppointmentsQuerySchema,
   listOwnAppointmentsQuerySchema,
+  ownerAvailabilityQuerySchema,
   rescheduleAppointmentBodySchema,
   updateAppointmentStatusBodySchema,
 } from "../schemas/appointments-http.schemas.js";
@@ -38,6 +40,24 @@ export class AppointmentsController {
     });
 
     return reply.status(200).send(availability);
+  }
+
+  async getOwnerAvailability(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.actor) return reply.code(401).send({ message: "Authentication required." });
+    const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+    const query = z.union([
+      ownerAvailabilityQuerySchema.extend({ date }),
+      ownerAvailabilityQuerySchema.extend({ from: date, to: date }),
+    ]).parse(request.query);
+    const input = { ...query, companyId: request.actor.companyId };
+    if ("date" in input) return reply.send(await this.getAvailabilityUseCase.execute(input));
+    return reply.send(await this.getAvailabilityUseCase.listAvailableDays(input));
+  }
+
+  async getAppointment(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.actor) return reply.code(401).send({ message: "Authentication required." });
+    const { appointmentId } = appointmentIdParamSchema.parse(request.params);
+    return reply.send(await this.listAppointmentsUseCase.get(request.actor, appointmentId));
   }
 
   async createPublic(request: FastifyRequest, reply: FastifyReply) {
@@ -72,6 +92,7 @@ export class AppointmentsController {
       clientName: body.clientName,
       clientPhone: body.clientPhone,
       initialStatus: body.initialStatus,
+      notes: body.notes,
     });
 
     return reply.status(201).send(appointment);

@@ -168,6 +168,13 @@ export const getMeOpenApiSchema = {
             currency: { type: "string", enum: ["BRL", "USD"] },
             isActive: { type: "boolean" },
             avatarUrl: { type: "string", nullable: true },
+            operatingDays: { type: "string", nullable: true },
+            operatingSchedule: { type: "array", nullable: true, items: {
+              type: "object", properties: {
+                dayOfWeek: { type: "integer" }, isOpen: { type: "boolean" },
+                openTime: { type: "string", nullable: true }, closeTime: { type: "string", nullable: true },
+              },
+            } },
           },
           required: ["id", "companyName", "timezone", "isActive"],
         },

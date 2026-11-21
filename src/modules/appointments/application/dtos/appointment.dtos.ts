@@ -5,6 +5,12 @@ import type {
   InitialAppointmentStatusValue,
 } from "../../domain/value-objects/appointment-status.vo.js";
 
+export type SchedulingActorSource =
+  | "OWNER"
+  | "COLLABORATOR"
+  | "PUBLIC"
+  | "WHATSAPP_AI";
+
 export interface AppointmentOutputDTO {
   id: string;
   companyId: string;
@@ -16,6 +22,7 @@ export interface AppointmentOutputDTO {
   endsAt: string;
   status: AppointmentStatusValue;
   cancellationReason: string | null;
+  notes: string | null;
   serviceNameSnapshot: string;
   servicePriceInCentsSnapshot: number;
   serviceDurationMinutesSnapshot: number;
@@ -32,6 +39,7 @@ export interface CreatePublicAppointmentInputDTO {
   clientName: string;
   clientPhone: string;
   now?: Date | undefined;
+  actorSource?: SchedulingActorSource | undefined;
 }
 
 export interface CreateInternalAppointmentInputDTO {
@@ -41,8 +49,10 @@ export interface CreateInternalAppointmentInputDTO {
   startsAt: Date;
   clientName: string;
   clientPhone: string;
+  notes?: string | undefined;
   initialStatus?: InitialAppointmentStatusValue | undefined;
   now?: Date | undefined;
+  actorSource?: SchedulingActorSource | undefined;
 }
 
 export interface ListAppointmentsInputDTO {
@@ -51,6 +61,7 @@ export interface ListAppointmentsInputDTO {
   from?: Date | undefined;
   to?: Date | undefined;
   status?: AppointmentStatusValue | undefined;
+  actorSource?: SchedulingActorSource | undefined;
 }
 
 export interface UpdateAppointmentStatusInputDTO {
@@ -59,6 +70,7 @@ export interface UpdateAppointmentStatusInputDTO {
   status: AppointmentStatusValue;
   cancellationReason?: string | null;
   now?: Date;
+  actorSource?: SchedulingActorSource | undefined;
 }
 
 export interface RescheduleAppointmentInputDTO {
@@ -67,6 +79,7 @@ export interface RescheduleAppointmentInputDTO {
   startsAt: Date;
   collaboratorId?: string | undefined;
   now?: Date | undefined;
+  actorSource?: SchedulingActorSource | undefined;
 }
 
 export function toAppointmentOutputDTO(
@@ -83,6 +96,7 @@ export function toAppointmentOutputDTO(
     endsAt: appointment.endsAt.toISOString(),
     status: appointment.status,
     cancellationReason: appointment.cancellationReason,
+    notes: appointment.notes,
     serviceNameSnapshot: appointment.serviceNameSnapshot,
     servicePriceInCentsSnapshot: appointment.servicePriceInCentsSnapshot,
     serviceDurationMinutesSnapshot: appointment.serviceDurationMinutesSnapshot,

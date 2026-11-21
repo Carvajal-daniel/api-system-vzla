@@ -52,6 +52,13 @@ export async function collectionRoutes(app: FastifyInstance) {
     return repository.list(request.actor.companyId, filter);
   });
 
+  app.get("/finance/appointments/payment-summary", policy, async (request) => {
+    if (request.actor?.role !== "OWNER") throw new CollectionsError("FORBIDDEN", collectionErrors.permission);
+    const { ids } = z.object({ ids: z.string().transform((value) => [...new Set(value.split(","))])
+      .pipe(z.array(z.string().uuid()).min(1).max(100)) }).parse(request.query);
+    return repository.listAppointmentBalances(request.actor.companyId, ids);
+  });
+
   app.get("/finance/appointments/:id", policy, async (request) => {
     if (!request.actor) throw new CollectionsError("FORBIDDEN", collectionErrors.permission);
     return detail.execute(request.actor, params.parse(request.params).id);

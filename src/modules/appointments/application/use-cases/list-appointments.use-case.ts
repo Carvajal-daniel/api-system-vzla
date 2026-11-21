@@ -1,4 +1,4 @@
-import { UnauthorizedSchedulingActionError } from "../../domain/errors/appointment-errors.js";
+import { AppointmentNotFoundError, UnauthorizedSchedulingActionError } from "../../domain/errors/appointment-errors.js";
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import {
   type AppointmentOutputDTO,
@@ -10,6 +10,14 @@ export class ListAppointmentsUseCase {
   constructor(
     private readonly appointmentsRepository: AppointmentsRepository,
   ) {}
+
+  async get(actor: ListAppointmentsInputDTO["actor"], id: string) {
+    const appointment = await this.appointmentsRepository.findById(actor.companyId, id);
+    if (!appointment || (actor.role === "COLLABORATOR" && appointment.collaboratorId !== actor.collaboratorId)) {
+      throw new AppointmentNotFoundError();
+    }
+    return toAppointmentOutputDTO(appointment);
+  }
 
   async execute(
     input: ListAppointmentsInputDTO,

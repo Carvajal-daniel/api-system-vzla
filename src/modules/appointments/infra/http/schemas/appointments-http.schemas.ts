@@ -54,6 +54,10 @@ export const availabilityQuerySchema = z.object({
   timezone: timezoneSchema.optional(),
 });
 
+export const ownerAvailabilityQuerySchema = availabilityQuerySchema.omit({ date: true, timezone: true }).extend({
+  appointmentId: z.string().uuid().optional(),
+});
+
 // Payload público nunca aceita endsAt nem status — ambos são derivados/impostos pelo backend.
 export const createPublicAppointmentBodySchema = z.object({
   serviceId: z.string().uuid("Invalid serviceId."),
@@ -70,6 +74,7 @@ export const createOwnerAppointmentBodySchema = z.object({
   startsAt: isoDateTimeSchema,
   clientName: z.string().trim().min(2, "Client name is too short.").max(120),
   clientPhone: z.string().trim().min(10, "Invalid phone number.").max(30),
+  notes: z.string().trim().max(1000).optional(),
   initialStatus: z.enum(["PENDING", "CONFIRMED"]).optional(),
 });
 
@@ -205,6 +210,11 @@ export const appointmentOpenApiSchema = {
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
   },
+} as const;
+
+export const staffAppointmentOpenApiSchema = {
+  ...appointmentOpenApiSchema,
+  properties: { ...appointmentOpenApiSchema.properties, notes: { type: "string", nullable: true } },
 } as const;
 
 export const availabilityResponseOpenApiSchema = {

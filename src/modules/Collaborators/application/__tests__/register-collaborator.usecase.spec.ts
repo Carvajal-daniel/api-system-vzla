@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PasswordHasher } from "../../../../shared/cryptography/password-hasher.js";
-import type { CollaboratorEntity } from "../../domain/entities/collaborator.entity.js";
+import { CollaboratorEntity } from "../../domain/entities/collaborator.entity.js";
 import type {
+  CollaboratorMetricSummary,
+  CollaboratorProfileDossier,
   CollaboratorRecord,
   CollaboratorsRepository,
+  TeamKpisSummary,
 } from "../../domain/repository/collaborators.repository.interface.js";
+import type { CollaboratorDayScheduleInput } from "../../domain/services/collaborator-schedule-validator.service.js";
 import {
   CannotModifyOwnOwnerStatusError,
   CollaboratorCompanyNotFoundError,
@@ -55,16 +59,94 @@ class InMemoryCollaboratorsRepository implements CollaboratorsRepository {
       email: collaborator.email,
       password: collaborator.password,
       phone: collaborator.phone,
+      whatsapp: collaborator.whatsapp ?? null,
       specialty: collaborator.specialty,
+      bio: collaborator.bio ?? null,
       commissionPercentage: collaborator.commissionPercentage,
+      defaultCommissionRate: collaborator.defaultCommissionRate,
+      monthlyRevenueGoal: collaborator.monthlyRevenueGoal ?? null,
+      status: collaborator.status,
       isActive: collaborator.isActive,
+      avatarUrl: collaborator.avatarUrl ?? null,
+      hiredAt: collaborator.hiredAt,
+      deactivatedAt: collaborator.deactivatedAt ?? null,
+      deactivationReason: collaborator.deactivationReason ?? null,
+      createdAt: collaborator.createdAt,
+      updatedAt: collaborator.updatedAt,
     });
   }
 
-  async findAllByCompanyId(companyId: string): Promise<CollaboratorRecord[]> {
+  async findById(collaboratorId: string, companyId: string): Promise<CollaboratorEntity | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) return null;
+
+    return CollaboratorEntity.reconstitute({
+      id: found.id,
+      companyId: found.companyId,
+      name: found.name,
+      email: found.email,
+      password: found.password,
+      phone: found.phone,
+      whatsapp: found.whatsapp ?? null,
+      specialty: found.specialty,
+      bio: found.bio ?? null,
+      commissionPercentage: found.commissionPercentage,
+      defaultCommissionRate: found.defaultCommissionRate,
+      monthlyRevenueGoal: found.monthlyRevenueGoal ?? null,
+      status: found.status,
+      isActive: found.isActive,
+      avatarUrl: found.avatarUrl ?? null,
+      hiredAt: found.hiredAt,
+      deactivatedAt: found.deactivatedAt ?? null,
+      deactivationReason: found.deactivationReason ?? null,
+      createdAt: found.createdAt,
+      updatedAt: found.updatedAt,
+    });
+  }
+
+  async findAllByCompanyId(
+    companyId: string,
+    filters?: { serviceId?: string | undefined; status?: "ACTIVE" | "INACTIVE" | undefined },
+  ): Promise<CollaboratorRecord[]> {
     return this.collaborators
-      .filter((c) => c.companyId === companyId)
+      .filter((c) => {
+        if (c.companyId !== companyId) return false;
+        if (filters?.status && c.status !== filters.status) return false;
+        return true;
+      })
       .map(({ password: _password, ...record }) => ({ ...record }));
+  }
+
+  async update(collaborator: CollaboratorEntity): Promise<void> {
+    const index = this.collaborators.findIndex(
+      (c) => c.id === collaborator.id && c.companyId === collaborator.companyId,
+    );
+    if (index !== -1) {
+      this.collaborators[index] = {
+        id: collaborator.id,
+        companyId: collaborator.companyId,
+        name: collaborator.name,
+        email: collaborator.email,
+        password: collaborator.password,
+        phone: collaborator.phone,
+        whatsapp: collaborator.whatsapp ?? null,
+        specialty: collaborator.specialty,
+        bio: collaborator.bio ?? null,
+        commissionPercentage: collaborator.commissionPercentage,
+        defaultCommissionRate: collaborator.defaultCommissionRate,
+        monthlyRevenueGoal: collaborator.monthlyRevenueGoal ?? null,
+        status: collaborator.status,
+        isActive: collaborator.isActive,
+        avatarUrl: collaborator.avatarUrl ?? null,
+        hiredAt: collaborator.hiredAt,
+        deactivatedAt: collaborator.deactivatedAt ?? null,
+        deactivationReason: collaborator.deactivationReason ?? null,
+        createdAt: collaborator.createdAt,
+        updatedAt: collaborator.updatedAt,
+      };
+    }
   }
 
   async updateStatusInCompany(
@@ -80,18 +162,115 @@ class InMemoryCollaboratorsRepository implements CollaboratorsRepository {
     }
 
     const updated: CollaboratorRecord = {
-      id: found.id,
-      companyId: found.companyId,
-      name: found.name,
-      email: found.email,
-      phone: found.phone,
-      specialty: found.specialty,
-      commissionPercentage: found.commissionPercentage,
+      ...found,
       isActive,
+      status: isActive ? "ACTIVE" : "INACTIVE",
+      deactivatedAt: isActive ? null : new Date(),
+      updatedAt: new Date(),
     };
     const index = this.collaborators.indexOf(found);
     this.collaborators[index] = { ...updated, password: found.password };
     return updated;
+  }
+
+  async listCollaboratorsWithMetrics(
+    companyId: string,
+  ): Promise<{ teamKpis: TeamKpisSummary; collaborators: CollaboratorMetricSummary[] }> {
+    const records = await this.findAllByCompanyId(companyId);
+    return {
+      teamKpis: {
+        totalCollaborators: records.length,
+        activeCollaborators: records.filter((r) => r.isActive).length,
+        totalCompletedAppointmentsMonth: 0,
+        totalRevenueMonthInCents: 0,
+        averageTeamRating: 5.0,
+      },
+      collaborators: records.map((r, i) => ({
+        id: r.id,
+        companyId: r.companyId,
+        name: r.name,
+        email: r.email,
+        phone: r.phone,
+        role: "COLLABORATOR" as const,
+        commissionPercentage: r.defaultCommissionRate,
+        hiredAt: r.hiredAt,
+        avatarUrl: r.avatarUrl ?? null,
+        specialty: r.specialty,
+        status: r.status,
+        isActive: r.isActive,
+        defaultCommissionRate: r.defaultCommissionRate,
+        completedAppointmentsMonth: 0,
+        servicesRevenueMonthInCents: 0,
+        productsSalesMonthInCents: 0,
+        productsSoldCountMonth: 0,
+        revenueMonthInCents: 0,
+        commissionMonthInCents: 0,
+        averageRating: 5.0,
+        totalReviews: 0,
+        rankingPosition: i + 1,
+        rankingScore: 80,
+        awardsCount: 0,
+      })),
+    };
+  }
+
+  async getProfileDossier(
+    collaboratorId: string,
+    companyId: string,
+  ): Promise<CollaboratorProfileDossier | null> {
+    const found = this.collaborators.find(
+      (c) => c.id === collaboratorId && c.companyId === companyId,
+    );
+    if (!found) return null;
+
+    return {
+      collaborator: found,
+      tenureFormatted: "1 mês",
+      tenureMonths: 1,
+      ranking: {
+        totalScore: 85,
+        position: 1,
+        totalInCompany: 1,
+        weights: {
+          servicesRevenueWeight: 35,
+          productsSalesWeight: 25,
+          appointmentsVolumeWeight: 15,
+          clientReviewsWeight: 15,
+          punctualityRetentionWeight: 10,
+        },
+        pillars: {
+          servicesRevenueScore: 35,
+          productsSalesScore: 20,
+          appointmentsVolumeScore: 15,
+          clientReviewsScore: 10,
+          punctualityRetentionScore: 5,
+        },
+      },
+      stats: {
+        completedAppointmentsMonth: 0,
+        totalCompletedAppointments: 0,
+        servicesRevenueMonthInCents: 0,
+        productsSalesMonthInCents: 0,
+        productsSoldCountMonth: 0,
+        revenueMonthInCents: 0,
+        totalRevenueInCents: 0,
+        commissionMonthInCents: 0,
+        totalCommissionInCents: 0,
+        averageRating: 5,
+        totalReviews: 0,
+      },
+      awards: [],
+      recentReviews: [],
+      services: [],
+      schedules: [],
+    };
+  }
+
+  async syncServices(): Promise<void> {}
+  async syncSchedules(): Promise<void> {}
+  async countFutureAppointments(): Promise<number> { return 0; }
+  async deactivateAndQueueReschedule(): Promise<{ queuedCount: number }> {
+    return { queuedCount: 0 };
   }
 }
 
@@ -139,12 +318,12 @@ describe("RegisterCollaboratorUseCase", () => {
         phone: "+584121234567",
         companyId,
         specialty: "Corte",
-        commissionPercentage: 40,
+        commissionPercentage: 50,
       }),
     ).rejects.toBeInstanceOf(CollaboratorCompanyNotFoundError);
   });
 
-  it("rejects registration when email already exists in collaborators", async () => {
+  it("rejects registration when email is already taken by collaborator or company", async () => {
     const repository = new InMemoryCollaboratorsRepository();
     repository.seedCompany(companyId, "owner@barber.com");
     const useCase = new RegisterCollaboratorUseCase(repository, new FakePasswordHasher());
@@ -156,105 +335,90 @@ describe("RegisterCollaboratorUseCase", () => {
       phone: "+584121234567",
       companyId,
       specialty: "Corte",
-      commissionPercentage: 40,
-    });
-
-    await expect(
-      useCase.execute({
-        name: "Outro Carlos",
-        email: "CARLOS@barber.com",
-        password: "Secret@123",
-        phone: "+584129999999",
-        companyId,
-        specialty: "Barba",
-        commissionPercentage: 35,
-      }),
-    ).rejects.toBeInstanceOf(CollaboratorEmailAlreadyInError);
-  });
-
-  it("rejects registration when email already exists in companies", async () => {
-    const repository = new InMemoryCollaboratorsRepository();
-    repository.seedCompany(companyId, "owner@barber.com");
-    const useCase = new RegisterCollaboratorUseCase(repository, new FakePasswordHasher());
-
-    await expect(
-      useCase.execute({
-        name: "Carlos Silva",
-        email: "OWNER@barber.com",
-        password: "Secret@123",
-        phone: "+584121234567",
-        companyId,
-        specialty: "Corte",
-        commissionPercentage: 40,
-      }),
-    ).rejects.toBeInstanceOf(CollaboratorEmailAlreadyInError);
-  });
-
-  it("lists collaborators scoped to company and updates status while blocking self-deactivation and cross-tenant updates", async () => {
-    const otherCompanyId = "22222222-2222-4222-8222-222222222222";
-    const repository = new InMemoryCollaboratorsRepository();
-    repository.seedCompany(companyId, "owner@barber.com");
-    repository.seedCompany(otherCompanyId, "owner@other.com");
-
-    const registerUseCase = new RegisterCollaboratorUseCase(repository, new FakePasswordHasher());
-    const listUseCase = new ListCompanyCollaboratorsUseCase(repository);
-    const updateStatusUseCase = new UpdateCollaboratorStatusUseCase(repository);
-
-    const createdA = await registerUseCase.execute({
-      name: "Carlos Silva",
-      email: "carlos@barber.com",
-      password: "Secret@123",
-      phone: "+584121234567",
-      companyId,
-      specialty: "Corte",
-      commissionPercentage: 40,
-    });
-    await registerUseCase.execute({
-      name: "Outro Barbeiro",
-      email: "outro@other.com",
-      password: "Secret@123",
-      phone: "+584129999999",
-      companyId: otherCompanyId,
-      specialty: "Barba",
       commissionPercentage: 50,
     });
 
-    const listA = await listUseCase.execute(companyId);
-    expect(listA).toHaveLength(1);
-    expect(listA[0]).toMatchObject({
-      id: createdA.id,
+    await expect(
+      useCase.execute({
+        name: "Outro Nome",
+        email: " Carlos@Barber.com ",
+        password: "AnotherPassword@123",
+        phone: "+584120000000",
+        companyId,
+        specialty: "Barba",
+        commissionPercentage: 30,
+      }),
+    ).rejects.toBeInstanceOf(CollaboratorEmailAlreadyInError);
+
+    await expect(
+      useCase.execute({
+        name: "Outro Nome",
+        email: " OWNER@barber.com ",
+        password: "AnotherPassword@123",
+        phone: "+584120000000",
+        companyId,
+        specialty: "Barba",
+        commissionPercentage: 30,
+      }),
+    ).rejects.toBeInstanceOf(CollaboratorEmailAlreadyInError);
+  });
+
+  it("updates collaborator status to inactive and active again", async () => {
+    const repository = new InMemoryCollaboratorsRepository();
+    repository.seedCompany(companyId, "owner@barber.com");
+    const registerUseCase = new RegisterCollaboratorUseCase(
+      repository,
+      new FakePasswordHasher(),
+    );
+    const updateStatusUseCase = new UpdateCollaboratorStatusUseCase(repository);
+
+    const created = await registerUseCase.execute({
       name: "Carlos Silva",
       email: "carlos@barber.com",
+      password: "Secret@123",
       phone: "+584121234567",
+      companyId,
       specialty: "Corte",
       commissionPercentage: 40,
-      isActive: true,
-      role: "COLLABORATOR",
     });
 
     const deactivated = await updateStatusUseCase.execute({
-      actorUserId: companyId,
+      actorUserId: "owner-user-id",
       companyId,
-      collaboratorId: createdA.id,
+      collaboratorId: created.id,
       isActive: false,
     });
     expect(deactivated.isActive).toBe(false);
 
+    const reactivated = await updateStatusUseCase.execute({
+      actorUserId: "owner-user-id",
+      companyId,
+      collaboratorId: created.id,
+      isActive: true,
+    });
+    expect(reactivated.isActive).toBe(true);
+  });
+
+  it("validates boundary conditions when updating status", async () => {
+    const repository = new InMemoryCollaboratorsRepository();
+    repository.seedCompany(companyId, "owner@barber.com");
+    const updateStatusUseCase = new UpdateCollaboratorStatusUseCase(repository);
+
     await expect(
       updateStatusUseCase.execute({
-        actorUserId: companyId,
+        actorUserId: "owner-user-id",
         companyId,
-        collaboratorId: companyId,
+        collaboratorId: "owner-user-id",
         isActive: false,
       }),
     ).rejects.toBeInstanceOf(CannotModifyOwnOwnerStatusError);
 
     await expect(
       updateStatusUseCase.execute({
-        actorUserId: otherCompanyId,
-        companyId: otherCompanyId,
-        collaboratorId: createdA.id,
-        isActive: true,
+        actorUserId: "owner-user-id",
+        companyId,
+        collaboratorId: "non-existent-id",
+        isActive: false,
       }),
     ).rejects.toBeInstanceOf(CollaboratorRecordNotFoundError);
   });

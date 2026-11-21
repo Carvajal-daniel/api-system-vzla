@@ -8,7 +8,7 @@ import {
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
 import type { InitialAppointmentStatusValue } from "../../domain/value-objects/appointment-status.vo.js";
 import {
@@ -44,7 +44,8 @@ export class CreateAppointmentUseCase {
     input: CreateInternalAppointmentInputDTO,
   ): Promise<AppointmentOutputDTO> {
     // Regra constitucional (Princípio III): colaborador tem proibição estrita de criar agendamentos por conta própria.
-    if (input.actor.role !== "OWNER") {
+    // Permite execução interna pelo OWNER ou por agente integrado de IA do WhatsApp.
+    if (input.actor.role !== "OWNER" && input.actorSource !== "WHATSAPP_AI") {
       throw new UnauthorizedSchedulingActionError(
         "Collaborators are not permitted to create appointments.",
       );
@@ -57,6 +58,7 @@ export class CreateAppointmentUseCase {
       startsAt: input.startsAt,
       clientName: input.clientName,
       clientPhone: input.clientPhone,
+      notes: input.notes,
       initialStatus: input.initialStatus ?? "PENDING",
       now: input.now ?? new Date(),
     });
@@ -70,6 +72,7 @@ export class CreateAppointmentUseCase {
     clientName: string;
     clientPhone: string;
     initialStatus: InitialAppointmentStatusValue;
+    notes?: string | undefined;
     now: Date;
   }): Promise<AppointmentOutputDTO> {
     const company = await this.lookupRepository.findCompanyById(params.companyId);
@@ -122,6 +125,7 @@ export class CreateAppointmentUseCase {
       timezone: company.timezone,
       now: params.now,
       workSchedule,
+      companyOperatingHours: getCompanyHours(company, localStart.dayOfWeek),
       blocks: blocks.map((b) => b.toTimeRange()),
     });
 
@@ -133,6 +137,7 @@ export class CreateAppointmentUseCase {
       clientPhone: params.clientPhone,
       startsAt: params.startsAt,
       initialStatus: params.initialStatus,
+      notes: params.notes,
       serviceNameSnapshot: service.name,
       servicePriceInCentsSnapshot: service.priceInCents,
       serviceDurationMinutesSnapshot: service.durationMinutes,

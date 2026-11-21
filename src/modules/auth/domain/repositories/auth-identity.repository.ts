@@ -29,6 +29,8 @@ export interface AuthCollaboratorRecord {
   readonly companyCurrency?: "BRL" | "USD";
   readonly companyIsActive: boolean;
   readonly companyAvatarUrl?: string | null;
+  readonly companyOperatingDays?: string | null;
+  readonly companyOperatingSchedule?: AuthOwnerRecord["operatingSchedule"];
   readonly name: string;
   readonly phone: string;
   readonly email: string;

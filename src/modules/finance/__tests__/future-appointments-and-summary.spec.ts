@@ -183,8 +183,8 @@ describe("Regras financeiras e validação de atendimentos futuros (10 cenários
   it("9) Validação de conclusão respeita instante UTC independente do fuso horário", async () => {
     // 11:00 em America/Sao_Paulo (-03:00) = 14:00Z; 11:01 (-03:00) = 14:01Z (futuro)
     const futureSaoPaulo = makeAppointment({ startsAt: new Date("2026-11-21T11:01:00-03:00") });
-    // 09:59 em America/Caracas (-04:00) = 13:59Z (passado)
-    const pastCaracas = makeAppointment({ startsAt: new Date("2026-11-21T09:59:00-04:00") });
+    // O atendimento em Caracas termina às 10:00 (-04:00), o mesmo instante de 14:00Z.
+    const pastCaracas = makeAppointment({ startsAt: new Date("2026-11-21T09:30:00-04:00") });
 
     const repoFuture = { findById: async () => futureSaoPaulo, save: async () => undefined } as unknown as AppointmentsRepository;
     const repoPast = { findById: async () => pastCaracas, save: async () => undefined } as unknown as AppointmentsRepository;

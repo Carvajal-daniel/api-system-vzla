@@ -13,6 +13,7 @@ import {
   createScheduleBlockResponseOpenApiSchema,
   errorOpenApiSchema,
   scheduleBlockOpenApiSchema,
+  staffAppointmentOpenApiSchema,
 } from "../schemas/appointments-http.schemas.js";
 
 export async function appointmentsRoutes(
@@ -208,7 +209,7 @@ export async function appointmentsRoutes(
             serviceId: { type: "string", format: "uuid" },
             date: { type: "string", description: "YYYY-MM-DD in company timezone" },
             collaboratorId: { type: "string", format: "uuid" },
-            timezone: { type: "string" },
+            timezone: { type: "string", deprecated: true, description: "The booking grid always uses the company timezone." },
           },
         },
         response: {
@@ -255,6 +256,11 @@ export async function appointmentsRoutes(
   );
 
   // === Internal Appointments Management ===
+  app.get("/appointments/availability", { preHandler: ownerGuard },
+    appointmentsController.getOwnerAvailability.bind(appointmentsController));
+  app.get("/appointments/:appointmentId", { preHandler: staffGuard,
+    schema: { response: { 200: staffAppointmentOpenApiSchema } },
+  }, appointmentsController.getAppointment.bind(appointmentsController));
   app.post(
     "/appointments",
     {
@@ -273,10 +279,11 @@ export async function appointmentsRoutes(
             clientName: { type: "string", minLength: 2, maxLength: 120 },
             clientPhone: { type: "string", minLength: 10, maxLength: 30 },
             initialStatus: { type: "string", enum: ["PENDING", "CONFIRMED"] },
+            notes: { type: "string", maxLength: 1000 },
           },
         },
         response: {
-          201: appointmentOpenApiSchema,
+          201: staffAppointmentOpenApiSchema,
           400: errorOpenApiSchema,
           401: errorOpenApiSchema,
           403: errorOpenApiSchema,
@@ -309,7 +316,7 @@ export async function appointmentsRoutes(
           },
         },
         response: {
-          200: { type: "array", items: appointmentOpenApiSchema },
+          200: { type: "array", items: staffAppointmentOpenApiSchema },
           400: errorOpenApiSchema,
           401: errorOpenApiSchema,
           403: errorOpenApiSchema,
@@ -339,7 +346,7 @@ export async function appointmentsRoutes(
           },
         },
         response: {
-          200: { type: "array", items: appointmentOpenApiSchema },
+          200: { type: "array", items: staffAppointmentOpenApiSchema },
           400: errorOpenApiSchema,
           401: errorOpenApiSchema,
           403: errorOpenApiSchema,
@@ -374,7 +381,7 @@ export async function appointmentsRoutes(
           },
         },
         response: {
-          200: appointmentOpenApiSchema,
+          200: staffAppointmentOpenApiSchema,
           400: errorOpenApiSchema,
           401: errorOpenApiSchema,
           403: errorOpenApiSchema,
@@ -408,7 +415,7 @@ export async function appointmentsRoutes(
           },
         },
         response: {
-          200: appointmentOpenApiSchema,
+          200: staffAppointmentOpenApiSchema,
           400: errorOpenApiSchema,
           401: errorOpenApiSchema,
           403: errorOpenApiSchema,

@@ -69,6 +69,10 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
       companyName: "Barbearia São Paulo",
       timezone: "America/Sao_Paulo",
       isActive: true,
+      operatingSchedule: [
+        { dayOfWeek: 3, isOpen: true, openTime: "09:10", closeTime: "12:00" },
+        { dayOfWeek: 4, isOpen: false, openTime: null, closeTime: null },
+      ],
     });
     lookupRepo.addCompany({
       id: companyVeId,
@@ -219,12 +223,12 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
     // 1. Disponibilidade Brasil (America/Sao_Paulo)
     const availBr = await testApp.inject({
       method: "GET",
-      url: `/public/companies/${companyBrId}/availability?serviceId=${serviceBrId}&date=${futureDate}`,
+      url: `/public/companies/${companyBrId}/availability?serviceId=${serviceBrId}&date=${futureDate}&timezone=Asia%2FKathmandu`,
     });
     expect(availBr.statusCode).toBe(200);
     const availBrBody = availBr.json();
     expect(availBrBody.timezone).toBe("America/Sao_Paulo");
-    expect(availBrBody.slotStepMinutes).toBe(15);
+    expect(availBrBody.slotStepMinutes).toBe(30);
     expect(availBrBody.slots.length).toBeGreaterThan(0);
 
     // 2. Agendamento público Brasil (+55) com concorrência simultânea -> 1x 201 + 1x 409
@@ -233,7 +237,7 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
       5,
       15,
       9,
-      0,
+      30,
       "America/Sao_Paulo",
     ).toISOString();
 
@@ -269,7 +273,7 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
     expect(createdBr.status).toBe("PENDING");
     expect(createdBr.clientPhone).toBe("+5511987654321");
     expect(createdBr.endsAt).toBe(
-      localDateTimeToUtc(2030, 5, 15, 9, 30, "America/Sao_Paulo").toISOString(),
+      localDateTimeToUtc(2030, 5, 15, 10, 0, "America/Sao_Paulo").toISOString(),
     );
 
     // 3. Agendamento público Venezuela (+58, America/Caracas)
@@ -315,10 +319,29 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
         clientName: "Cliente VIP",
         clientPhone: "+5511999991111",
         initialStatus: "CONFIRMED",
+        notes: "  Corte na tesoura  ",
       },
     });
     expect(ownerBooking.statusCode).toBe(201);
     expect(ownerBooking.json().status).toBe("CONFIRMED");
+    expect(ownerBooking.json().notes).toBe("Corte na tesoura");
+    expect(createdBr).not.toHaveProperty("notes");
+
+    const appointmentUrl = `/appointments/${ownerBooking.json().id}`;
+    const assignedDetails = await testApp.inject({ url: appointmentUrl, headers: { authorization: `Bearer ${collabBrToken}` } });
+    expect(assignedDetails.json().notes).toBe("Corte na tesoura");
+    expect((await testApp.inject({ url: appointmentUrl, headers: { authorization: `Bearer ${ownerVeToken}` } })).statusCode).toBe(404);
+
+    const days = await testApp.inject({ url: `/appointments/availability?serviceId=${serviceBrId}&collaboratorId=${collabBrId}&from=${futureDate}&to=2030-05-16`,
+      headers: { authorization: `Bearer ${ownerBrToken}` } });
+    expect(days.statusCode).toBe(200);
+    expect(days.json()).toEqual({ availableDays: [futureDate] });
+
+    const invalidSlot = await testApp.inject({ method: "POST", url: `/public/companies/${companyBrId}/appointments`, payload: {
+      serviceId: serviceBrId, collaboratorId: collabBrId, startsAt: "2030-05-15T12:15:00.000Z", clientName: "Cliente Brasil", clientPhone: "+5511999991111",
+    } });
+    expect(invalidSlot.statusCode).toBe(400);
+    expect(invalidSlot.json().message).toBe("Appointment must start on a 30-minute boundary.");
 
     const earlyCompletion = await testApp.inject({
       method: "PATCH",
@@ -328,7 +351,7 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
     });
     expect(earlyCompletion.statusCode).toBe(400);
     expect(earlyCompletion.json().message).toBe(
-      "Cannot complete an appointment before its scheduled date and time.",
+      "Cannot complete an appointment before it ends.",
     );
 
     // 5. Isolamento multi-tenant: OWNER da Venezuela não vê nem altera agendamento do Brasil

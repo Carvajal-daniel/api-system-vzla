@@ -18,7 +18,7 @@ export class UpdateAppointmentStatusUseCase {
   async execute(
     input: UpdateAppointmentStatusInputDTO,
   ): Promise<AppointmentOutputDTO> {
-    const { actor } = input;
+    const { actor, actorSource } = input;
 
     const appointment = await this.appointmentsRepository.findById(
       actor.companyId,
@@ -29,7 +29,9 @@ export class UpdateAppointmentStatusUseCase {
       throw new AppointmentNotFoundError();
     }
 
+    // Permite transição por OWNER, pela IA do WhatsApp ou pelo próprio colaborador atribuído.
     if (
+      actorSource !== "WHATSAPP_AI" &&
       actor.role === "COLLABORATOR" &&
       appointment.collaboratorId !== actor.collaboratorId
     ) {
@@ -37,7 +39,7 @@ export class UpdateAppointmentStatusUseCase {
     }
 
     const { startsAt, status, collaboratorId } = appointment;
-    if (input.status === "COMPLETED" && startsAt > (input.now ?? new Date())) {
+    if (input.status === "COMPLETED" && appointment.endsAt > (input.now ?? new Date())) {
       throw new AppointmentCompletionTooEarlyError();
     }
 

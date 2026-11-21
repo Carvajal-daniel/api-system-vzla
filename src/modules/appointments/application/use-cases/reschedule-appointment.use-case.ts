@@ -8,7 +8,7 @@ import {
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
 import { AppointmentStatus } from "../../domain/value-objects/appointment-status.vo.js";
 import {
@@ -27,9 +27,10 @@ export class RescheduleAppointmentUseCase {
   async execute(
     input: RescheduleAppointmentInputDTO,
   ): Promise<AppointmentOutputDTO> {
-    const { actor } = input;
+    const { actor, actorSource } = input;
 
-    if (actor.role !== "OWNER") {
+    // Permite reagendamento pelo OWNER ou por agente integrado de IA do WhatsApp.
+    if (actor.role !== "OWNER" && actorSource !== "WHATSAPP_AI") {
       throw new UnauthorizedSchedulingActionError();
     }
 
@@ -90,6 +91,7 @@ export class RescheduleAppointmentUseCase {
       timezone: company.timezone,
       now: input.now ?? new Date(),
       workSchedule,
+      companyOperatingHours: getCompanyHours(company, localStart.dayOfWeek),
       blocks: blocks.map((b) => b.toTimeRange()),
     });
 

@@ -74,6 +74,8 @@ export interface CollaboratorProfileDTO {
     readonly currency: "BRL" | "USD";
     readonly isActive: boolean;
     readonly avatarUrl: string | null;
+    readonly operatingDays?: string | null;
+    readonly operatingSchedule?: OwnerProfileDTO["company"]["operatingSchedule"];
   };
 }
 

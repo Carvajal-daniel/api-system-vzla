@@ -1,4 +1,9 @@
-import type { CollaboratorsRepository } from "../domain/repository/collaborators.repository.interface.js";
+import type {
+  CollaboratorMetricSummary,
+  CollaboratorRecord,
+  CollaboratorsRepository,
+  TeamKpisSummary,
+} from "../domain/repository/collaborators.repository.interface.js";
 
 export interface CollaboratorOutputDTO {
   readonly id: string;
@@ -9,25 +14,28 @@ export interface CollaboratorOutputDTO {
   readonly commissionPercentage: number;
   readonly isActive: boolean;
   readonly role: "COLLABORATOR";
-  readonly avatarUrl?: string | null;
+  readonly avatarUrl?: string | null | undefined;
+}
+
+export interface ListCollaboratorsResponse {
+  teamKpis: TeamKpisSummary;
+  collaborators: CollaboratorMetricSummary[];
 }
 
 export class ListCompanyCollaboratorsUseCase {
   constructor(private readonly collaboratorsRepository: CollaboratorsRepository) {}
 
-  async execute(companyId: string): Promise<CollaboratorOutputDTO[]> {
-    const records = await this.collaboratorsRepository.findAllByCompanyId(companyId);
+  async execute(
+    companyId: string,
+    filters?: { serviceId?: string | undefined; status?: "ACTIVE" | "INACTIVE" | undefined },
+  ): Promise<CollaboratorRecord[]> {
+    return this.collaboratorsRepository.findAllByCompanyId(companyId, filters);
+  }
 
-    return records.map((record) => ({
-      id: record.id,
-      name: record.name,
-      email: record.email,
-      phone: record.phone,
-      specialty: record.specialty,
-      commissionPercentage: record.commissionPercentage,
-      isActive: record.isActive,
-      role: "COLLABORATOR",
-      avatarUrl: record.avatarUrl ?? null,
-    }));
+  async executeWithMetrics(
+    companyId: string,
+    referenceDate?: Date,
+  ): Promise<ListCollaboratorsResponse> {
+    return this.collaboratorsRepository.listCollaboratorsWithMetrics(companyId, referenceDate);
   }
 }

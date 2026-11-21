@@ -24,7 +24,7 @@ describe("AvailabilityCalculator", () => {
     breakEnd: "11:00",
   };
 
-  it("generates 15-minute step slots respecting break, blocks, active appointments and timezone", () => {
+  it("generates 30-minute step slots respecting break, blocks, active appointments and timezone", () => {
     const tz = "America/Caracas"; // UTC-4
     const now = localDateTimeToUtc(2026, 11, 25, 8, 0, tz);
 
@@ -51,14 +51,27 @@ describe("AvailabilityCalculator", () => {
       activeAppointments: [activeAppt],
     });
 
-    // Tramo manhã 09:00-10:30 sem 09:00-09:30 -> 09:30, 09:45, 10:00 (10:15 invade descanso 10:30)
-    // Tramo pós-descanso 11:00-12:00 sem 11:00-11:30 -> 11:30 (11:45 passa de 12:00)
+    // A grade em meia hora deixa 09:30, 10:00 e 11:30 livres.
     expect(slots.map((s) => s.startsAt.toISOString())).toEqual([
       localDateTimeToUtc(2026, 11, 25, 9, 30, tz).toISOString(),
-      localDateTimeToUtc(2026, 11, 25, 9, 45, tz).toISOString(),
       localDateTimeToUtc(2026, 11, 25, 10, 0, tz).toISOString(),
       localDateTimeToUtc(2026, 11, 25, 11, 30, tz).toISOString(),
     ]);
+  });
+
+  it.each([[20, 30], [45, 60]])("rounds a busy interval of %i minutes up to the next half hour", (duration, nextMinute) => {
+    const tz = "America/Caracas";
+    const instant = (hour: number, minute: number) => localDateTimeToUtc(2026, 11, 25, hour, minute, tz);
+    const slots = AvailabilityCalculator.calculateSlotsForCollaborator({
+      date: "2026-11-25", timezone: tz, serviceDurationMinutes: 20, now: instant(13, 0),
+      collaborator: { id: "p", name: "Ana" },
+      workSchedule: { ...wednesdaySchedule, startTime: "14:05", endTime: "18:00", breakStart: "16:00", breakEnd: "16:12" },
+      companyOperatingHours: { openTime: "14:00", closeTime: "17:30" },
+      blocks: [], activeAppointments: [TimeRange.create(instant(14, 0), instant(14, duration))],
+    });
+    expect(slots[0]?.startsAt).toEqual(instant(14 + Math.floor(nextMinute / 60), nextMinute % 60));
+    expect(slots.find((slot) => slot.startsAt >= instant(16, 0))?.startsAt).toEqual(instant(16, 30));
+    expect(slots.at(-1)?.endsAt).toEqual(instant(17, 20));
   });
 
   it("excludes past slots and returns empty when service is longer than every free window", () => {
@@ -144,10 +157,10 @@ describe("AvailabilityCalculator", () => {
       }),
     ).toThrow(AppointmentInPastError);
 
-    // Fora do expediente (termina às 12:15 > 12:00)
+    // Fora do expediente (começa no horário de fechamento).
     expect(() =>
       AvailabilityCalculator.validateSlotAvailability({
-        startsAt: localDateTimeToUtc(2026, 11, 25, 11, 45, tz),
+        startsAt: localDateTimeToUtc(2026, 11, 25, 12, 0, tz),
         serviceDurationMinutes: 30,
         timezone: tz,
         now,
@@ -156,10 +169,10 @@ describe("AvailabilityCalculator", () => {
       }),
     ).toThrow(AppointmentOutsideWorkScheduleError);
 
-    // Invade descanso (10:15-10:45 intersecta 10:30-11:00)
+    // Começa durante o descanso.
     expect(() =>
       AvailabilityCalculator.validateSlotAvailability({
-        startsAt: localDateTimeToUtc(2026, 11, 25, 10, 15, tz),
+        startsAt: localDateTimeToUtc(2026, 11, 25, 10, 30, tz),
         serviceDurationMinutes: 30,
         timezone: tz,
         now,

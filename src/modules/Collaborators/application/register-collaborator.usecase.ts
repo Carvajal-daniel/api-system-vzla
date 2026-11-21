@@ -23,13 +23,23 @@ export class RegisterCollaboratorUseCase {
     }
 
     const passwordHash = await this.passwordHasher.hash(data.password);
+    const defaultRate = data.defaultCommissionRate ?? data.commissionPercentage ?? 0;
+    const hiredAt = data.hiredAt ? new Date(data.hiredAt) : new Date();
+
     const collaborator = CollaboratorEntity.create({
-      ...data,
+      companyId: data.companyId,
       name: data.name.trim(),
       email: normalizedEmail,
       phone: data.phone.trim(),
+      whatsapp: data.whatsapp ? data.whatsapp.trim() : null,
       specialty: data.specialty.trim(),
+      bio: data.bio ? data.bio.trim() : null,
       password: passwordHash,
+      commissionPercentage: defaultRate,
+      defaultCommissionRate: defaultRate,
+      monthlyRevenueGoal: data.monthlyRevenueGoal ?? null,
+      avatarUrl: data.avatarUrl ?? null,
+      hiredAt,
     });
 
     await this.collaboratorsRepository.save(collaborator);
@@ -40,8 +50,16 @@ export class RegisterCollaboratorUseCase {
       email: collaborator.email,
       companyId: collaborator.companyId,
       specialty: collaborator.specialty,
+      phone: collaborator.phone,
+      whatsapp: collaborator.whatsapp ?? null,
+      bio: collaborator.bio ?? null,
       commissionPercentage: collaborator.commissionPercentage,
+      defaultCommissionRate: collaborator.defaultCommissionRate,
+      monthlyRevenueGoal: collaborator.monthlyRevenueGoal ?? null,
+      status: collaborator.status,
       isActive: collaborator.isActive,
+      avatarUrl: collaborator.avatarUrl ?? null,
+      hiredAt: collaborator.hiredAt,
     };
   }
 }
