@@ -24,6 +24,12 @@ export const createServiceBodySchema = z.object({
     .number()
     .int("Service price must be an integer in cents.")
     .min(0, "Service price cannot be negative."),
+  imageUrl: z
+    .string()
+    .trim()
+    .max(400_000, "Image URL or data URI too large.")
+    .nullable()
+    .optional(),
 });
 
 export const updateServiceBodySchema = z
@@ -49,6 +55,12 @@ export const updateServiceBodySchema = z
       .number()
       .int("Service price must be an integer in cents.")
       .min(0, "Service price cannot be negative.")
+      .optional(),
+    imageUrl: z
+      .string()
+      .trim()
+      .max(400_000, "Image URL or data URI too large.")
+      .nullable()
       .optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {

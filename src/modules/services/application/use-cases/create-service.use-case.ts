@@ -25,6 +25,7 @@ export class CreateServiceUseCase {
       description: input.description,
       durationMinutes: input.durationMinutes,
       priceInCents: input.priceInCents,
+      imageUrl: input.imageUrl,
     });
 
     const existing = await this.servicesRepository.findByNormalizedNameInCompany(

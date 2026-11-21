@@ -4,6 +4,7 @@ export interface CollaboratorSummary {
   name: string;
   specialty: string;
   isActive: boolean;
+  avatarUrl?: string | null;
 }
 
 export interface CollaboratorLookupRepository {
@@ -16,4 +17,5 @@ export interface CollaboratorLookupRepository {
     collaboratorIds: string[],
     companyId: string,
   ): Promise<CollaboratorSummary[]>;
+  findAllActiveInCompany(companyId: string): Promise<CollaboratorSummary[]>;
 }

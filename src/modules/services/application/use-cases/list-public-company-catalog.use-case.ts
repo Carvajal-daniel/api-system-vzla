@@ -27,6 +27,9 @@ export class ListPublicCompanyCatalogUseCase {
       id: company.id,
       companyName: company.companyName,
       timezone: company.timezone,
+      avatarUrl: company.avatarUrl ?? null,
+      operatingDays: company.operatingDays ?? null,
+      operatingSchedule: company.operatingSchedule ?? null,
     };
 
     const activeServices = await this.servicesRepository.findActiveByCompany(companyId);
@@ -44,12 +47,18 @@ export class ListPublicCompanyCatalogUseCase {
       companyId,
     );
 
+    // Fallback: busca todos os colaboradores ativos da empresa para serviços sem vínculo explícito
+    const allCompanyCollaborators =
+      await this.collaboratorLookupRepository.findAllActiveInCompany(companyId);
+
     const uniqueCollaboratorIds = [...new Set(links.map((link) => link.collaboratorId))];
     const activeCollaborators =
-      await this.collaboratorLookupRepository.findActiveByIdsInCompany(
-        uniqueCollaboratorIds,
-        companyId,
-      );
+      uniqueCollaboratorIds.length > 0
+        ? await this.collaboratorLookupRepository.findActiveByIdsInCompany(
+            uniqueCollaboratorIds,
+            companyId,
+          )
+        : allCompanyCollaborators;
 
     const collaboratorMap = new Map(
       activeCollaborators.map((collaborator) => [collaborator.id, collaborator]),
@@ -68,20 +77,37 @@ export class ListPublicCompanyCatalogUseCase {
         id: collaborator.id,
         name: collaborator.name,
         specialty: collaborator.specialty,
+        avatarUrl: collaborator.avatarUrl ?? null,
       });
       collaboratorsByService.set(link.serviceId, list);
     }
 
+    // Para serviços sem vínculos exclusivos cadastrados, todos os profissionais ativos atendem
+    const fallbackCollaborators: PublicCatalogCollaboratorOutputDTO[] =
+      allCompanyCollaborators.map((c) => ({
+        id: c.id,
+        name: c.name,
+        specialty: c.specialty,
+        avatarUrl: c.avatarUrl ?? null,
+      }));
+
     return {
       company: companyInfo,
-      services: activeServices.map((service) => ({
-        id: service.id,
-        name: service.name,
-        description: service.description,
-        durationMinutes: service.durationMinutes,
-        priceInCents: service.priceInCents,
-        collaborators: collaboratorsByService.get(service.id) ?? [],
-      })),
+      services: activeServices.map((service) => {
+        const assigned = collaboratorsByService.get(service.id);
+        const collaborators =
+          assigned && assigned.length > 0 ? assigned : fallbackCollaborators;
+
+        return {
+          id: service.id,
+          name: service.name,
+          description: service.description,
+          durationMinutes: service.durationMinutes,
+          priceInCents: service.priceInCents,
+          imageUrl: service.imageUrl ?? null,
+          collaborators,
+        };
+      }),
     };
   }
 }

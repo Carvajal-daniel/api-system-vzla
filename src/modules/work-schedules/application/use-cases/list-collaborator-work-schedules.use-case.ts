@@ -17,7 +17,12 @@ export class ListCollaboratorWorkSchedulesUseCase {
   ) {}
 
   async execute(actor: ActorContext, collaboratorId: string): Promise<WorkScheduleOutputDTO[]> {
-    if (actor.role !== "OWNER") {
+    // Permite OWNER consultar qualquer colaborador da empresa ou COLLABORATOR consultar apenas sua própria grade
+    const isOwner = actor.role === "OWNER";
+    const isOwnCollaborator =
+      actor.role === "COLLABORATOR" && actor.collaboratorId === collaboratorId;
+
+    if (!isOwner && !isOwnCollaborator) {
       throw new UnauthorizedWorkScheduleActionError();
     }
 

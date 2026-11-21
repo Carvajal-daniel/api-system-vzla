@@ -4,15 +4,18 @@ import { makeWorkSchedulesController } from "../factories/make-work-schedules-co
 
 export async function workSchedulesRoutes(app: FastifyInstance): Promise<void> {
   const workSchedulesController = makeWorkSchedulesController();
-  const ownerGuard = [authenticate, authorizeRoles("OWNER")];
+  const ownerOrCollaboratorGuard = [
+    authenticate,
+    authorizeRoles("OWNER", "COLLABORATOR"),
+  ];
   const collaboratorGuard = [authenticate, authorizeRoles("COLLABORATOR")];
 
   app.put(
     "/collaborators/:collaboratorId/work-schedules",
     {
-      preHandler: ownerGuard,
+      preHandler: ownerOrCollaboratorGuard,
       schema: {
-        tags: ["Work Schedules (Owner)"],
+        tags: ["Work Schedules (Owner & Collaborator)"],
         summary: "Configure one or more weekly work schedule days for a collaborator",
         security: [{ bearerAuth: [] }],
       },
@@ -23,9 +26,9 @@ export async function workSchedulesRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     "/collaborators/:collaboratorId/work-schedules",
     {
-      preHandler: ownerGuard,
+      preHandler: ownerOrCollaboratorGuard,
       schema: {
-        tags: ["Work Schedules (Owner)"],
+        tags: ["Work Schedules (Owner & Collaborator)"],
         summary: "List configured weekly work schedules for a collaborator",
         security: [{ bearerAuth: [] }],
       },

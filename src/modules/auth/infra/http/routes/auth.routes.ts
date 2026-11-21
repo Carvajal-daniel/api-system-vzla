@@ -40,4 +40,30 @@ export async function authRoutes(
     },
     authController.me.bind(authController),
   );
+
+  app.patch(
+    "/me/profile",
+    {
+      preHandler: [authenticate],
+      schema: {
+        tags: ["Authentication"],
+        summary: "Update authenticated user's profile (name, companyName for owner, and avatarUrl)",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    authController.updateProfile.bind(authController),
+  );
+
+  app.patch(
+    "/me/password",
+    {
+      preHandler: [authenticate],
+      schema: {
+        tags: ["Authentication"],
+        summary: "Change authenticated user's password after verifying current password",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    authController.updatePassword.bind(authController),
+  );
 }

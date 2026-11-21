@@ -9,6 +9,7 @@ export interface ServiceOutputDTO {
   durationMinutes: number;
   priceInCents: number;
   active: boolean;
+  imageUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,6 +19,7 @@ export interface CreateServiceInputDTO {
   description?: string | null | undefined;
   durationMinutes: number;
   priceInCents: number;
+  imageUrl?: string | null | undefined;
 }
 
 export interface UpdateServiceInputDTO {
@@ -26,6 +28,7 @@ export interface UpdateServiceInputDTO {
   description?: string | null | undefined;
   durationMinutes?: number | undefined;
   priceInCents?: number | undefined;
+  imageUrl?: string | null | undefined;
 }
 
 export interface UpdateServiceStatusInputDTO {
@@ -82,6 +85,7 @@ export interface PublicCatalogCollaboratorOutputDTO {
   id: string;
   name: string;
   specialty: string;
+  avatarUrl?: string | null;
 }
 
 export interface PublicCatalogServiceOutputDTO {
@@ -90,6 +94,7 @@ export interface PublicCatalogServiceOutputDTO {
   description: string | null;
   durationMinutes: number;
   priceInCents: number;
+  imageUrl?: string | null;
   collaborators: PublicCatalogCollaboratorOutputDTO[];
 }
 
@@ -97,6 +102,14 @@ export interface PublicCompanyInfoDTO {
   id: string;
   companyName: string;
   timezone: string;
+  avatarUrl?: string | null;
+  operatingDays?: string | null;
+  operatingSchedule?: Array<{
+    dayOfWeek: number;
+    isOpen: boolean;
+    openTime: string | null;
+    closeTime: string | null;
+  }> | null;
 }
 
 export interface PublicCompanyCatalogOutputDTO {
@@ -113,6 +126,7 @@ export function toServiceOutputDTO(service: ServiceEntity): ServiceOutputDTO {
     durationMinutes: service.durationMinutes,
     priceInCents: service.priceInCents,
     active: service.active,
+    imageUrl: service.imageUrl,
     createdAt: service.createdAt,
     updatedAt: service.updatedAt,
   };

@@ -44,6 +44,42 @@ export class GetAvailabilityUseCase {
       timezone,
     );
 
+    // Verifica se a barbearia/salão atende neste dia da semana
+    let companyOperatingHours: { openTime: string; closeTime: string } | null = null;
+    if (company.operatingSchedule && Array.isArray(company.operatingSchedule)) {
+      const scheduleSlot = company.operatingSchedule.find((s) => s.dayOfWeek === dayOfWeek);
+      if (scheduleSlot) {
+        if (!scheduleSlot.isOpen || !scheduleSlot.openTime || !scheduleSlot.closeTime) {
+          return {
+            companyId: input.companyId,
+            serviceId: input.serviceId,
+            date: input.date,
+            timezone,
+            slotStepMinutes: DEFAULT_SLOT_STEP_MINUTES,
+            serviceDurationMinutes: 0,
+            slots: [],
+          };
+        }
+        companyOperatingHours = {
+          openTime: scheduleSlot.openTime,
+          closeTime: scheduleSlot.closeTime,
+        };
+      }
+    } else if (company.operatingDays) {
+      const allowedDays = company.operatingDays.split(",").map((d) => Number(d.trim()));
+      if (!allowedDays.includes(dayOfWeek)) {
+        return {
+          companyId: input.companyId,
+          serviceId: input.serviceId,
+          date: input.date,
+          timezone,
+          slotStepMinutes: DEFAULT_SLOT_STEP_MINUTES,
+          serviceDurationMinutes: 0,
+          slots: [],
+        };
+      }
+    }
+
     const service = await this.lookupRepository.findServiceById(
       input.companyId,
       input.serviceId,
@@ -110,6 +146,7 @@ export class GetAvailabilityUseCase {
           name: collaborator.collaboratorName,
         },
         workSchedule,
+        companyOperatingHours,
         blocks: blocks.map((b) => b.toTimeRange()),
         activeAppointments: activeAppointments.map((a) => a.toTimeRange()),
       });

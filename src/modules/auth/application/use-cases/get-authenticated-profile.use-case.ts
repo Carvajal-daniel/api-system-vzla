@@ -21,12 +21,16 @@ export class GetAuthenticatedProfileUseCase {
         name: owner.name,
         email: owner.email,
         phone: owner.phone,
+        avatarUrl: owner.avatarUrl ?? null,
         isActive: owner.isActive,
         company: {
           id: owner.companyId,
           companyName: owner.companyName,
           timezone: owner.companyTimezone,
           isActive: owner.isActive,
+          avatarUrl: owner.avatarUrl ?? null,
+          operatingDays: owner.operatingDays ?? null,
+          operatingSchedule: owner.operatingSchedule ?? null,
         },
       };
     }
@@ -47,6 +51,7 @@ export class GetAuthenticatedProfileUseCase {
       name: collaborator.name,
       email: collaborator.email,
       phone: collaborator.phone,
+      avatarUrl: collaborator.avatarUrl ?? null,
       specialty: collaborator.specialty,
       commissionPercentage: collaborator.commissionPercentage,
       isActive: collaborator.isActive,
@@ -55,6 +60,7 @@ export class GetAuthenticatedProfileUseCase {
         companyName: collaborator.companyName,
         timezone: collaborator.companyTimezone,
         isActive: collaborator.companyIsActive,
+        avatarUrl: collaborator.companyAvatarUrl ?? null,
       },
     };
   }

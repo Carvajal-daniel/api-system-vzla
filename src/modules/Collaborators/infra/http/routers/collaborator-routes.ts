@@ -45,4 +45,30 @@ export async function CollaboratorRoutes(
     },
     managementController.updateStatus.bind(managementController),
   );
+
+  app.patch(
+    "/collaborators/:collaboratorId",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["Collaborators (Owner)"],
+        summary: "Update collaborator name, specialty, and default commission percentage",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    managementController.updateDetails.bind(managementController),
+  );
+
+  app.delete(
+    "/collaborators/:collaboratorId",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["Collaborators (Owner)"],
+        summary: "Delete a collaborator if they have no linked appointments",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    managementController.remove.bind(managementController),
+  );
 }

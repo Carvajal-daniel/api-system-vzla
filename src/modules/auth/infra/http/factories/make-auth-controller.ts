@@ -27,5 +27,7 @@ export function makeAuthController(
     new RegisterOwnerUseCase(authIdentityRepository, passwordHasher, tokenService),
     new LoginUseCase(authIdentityRepository, passwordHasher, tokenService),
     new GetAuthenticatedProfileUseCase(authIdentityRepository),
+    authIdentityRepository,
+    passwordHasher,
   );
 }

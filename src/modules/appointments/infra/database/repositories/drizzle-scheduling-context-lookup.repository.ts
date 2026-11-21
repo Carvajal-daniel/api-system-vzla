@@ -25,12 +25,24 @@ export class DrizzleSchedulingContextLookupRepository
         companyName: CompanyTable.companyName,
         timezone: CompanyTable.timezone,
         isActive: CompanyTable.isActive,
+        operatingDays: CompanyTable.operatingDays,
+        operatingSchedule: CompanyTable.operatingSchedule,
       })
       .from(CompanyTable)
       .where(eq(CompanyTable.id, companyId))
       .limit(1);
 
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      companyName: row.companyName,
+      timezone: row.timezone,
+      isActive: row.isActive,
+      operatingDays: row.operatingDays,
+      operatingSchedule: (row.operatingSchedule as ActiveCompanyContext["operatingSchedule"]) ?? null,
+    };
   }
 
   async findServiceById(
@@ -110,13 +122,40 @@ export class DrizzleSchedulingContextLookupRepository
       .limit(1);
 
     const row = rows[0];
-    if (!row) return null;
+    if (row) {
+      return {
+        collaboratorId: row.collaboratorId,
+        collaboratorName: row.collaboratorName,
+        commissionPercentage: Number(row.commissionPercentage),
+        isActive: row.isActive,
+      };
+    }
+
+    // Fallback: se o colaborador pertencer à empresa e estiver ativo, permite o agendamento usando sua comissão padrão
+    const directRows = await db
+      .select({
+        collaboratorId: CollaboratorTable.id,
+        collaboratorName: CollaboratorTable.name,
+        commissionPercentage: CollaboratorTable.commissionPercentage,
+        isActive: CollaboratorTable.isActive,
+      })
+      .from(CollaboratorTable)
+      .where(
+        and(
+          eq(CollaboratorTable.companyId, companyId),
+          eq(CollaboratorTable.id, collaboratorId),
+        ),
+      )
+      .limit(1);
+
+    const direct = directRows[0];
+    if (!direct) return null;
 
     return {
-      collaboratorId: row.collaboratorId,
-      collaboratorName: row.collaboratorName,
-      commissionPercentage: Number(row.commissionPercentage),
-      isActive: row.isActive,
+      collaboratorId: direct.collaboratorId,
+      collaboratorName: direct.collaboratorName,
+      commissionPercentage: Number(direct.commissionPercentage),
+      isActive: direct.isActive,
     };
   }
 
@@ -147,11 +186,37 @@ export class DrizzleSchedulingContextLookupRepository
         ),
       );
 
-    return rows.map((row) => ({
-      collaboratorId: row.collaboratorId,
-      collaboratorName: row.collaboratorName,
-      commissionPercentage: Number(row.commissionPercentage),
-      isActive: row.isActive,
+    if (rows.length > 0) {
+      return rows.map((row) => ({
+        collaboratorId: row.collaboratorId,
+        collaboratorName: row.collaboratorName,
+        commissionPercentage: Number(row.commissionPercentage),
+        isActive: row.isActive,
+      }));
+    }
+
+    // Fallback inteligente: se a empresa não configurou tabela de comissões exclusivas para o serviço,
+    // todos os colaboradores ativos da empresa ficam elegíveis para atendimento com sua comissão padrão.
+    const allActive = await db
+      .select({
+        collaboratorId: CollaboratorTable.id,
+        collaboratorName: CollaboratorTable.name,
+        commissionPercentage: CollaboratorTable.commissionPercentage,
+        isActive: CollaboratorTable.isActive,
+      })
+      .from(CollaboratorTable)
+      .where(
+        and(
+          eq(CollaboratorTable.companyId, companyId),
+          eq(CollaboratorTable.isActive, true),
+        ),
+      );
+
+    return allActive.map((c) => ({
+      collaboratorId: c.collaboratorId,
+      collaboratorName: c.collaboratorName,
+      commissionPercentage: Number(c.commissionPercentage),
+      isActive: c.isActive,
     }));
   }
 

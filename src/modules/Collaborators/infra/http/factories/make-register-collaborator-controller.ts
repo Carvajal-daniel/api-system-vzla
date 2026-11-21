@@ -31,5 +31,6 @@ export function makeCollaboratorsManagementController(
   return new CollaboratorsManagementController({
     listCompanyCollaboratorsUseCase: new ListCompanyCollaboratorsUseCase(repository),
     updateCollaboratorStatusUseCase: new UpdateCollaboratorStatusUseCase(repository),
+    collaboratorsRepository: repository,
   });
 }

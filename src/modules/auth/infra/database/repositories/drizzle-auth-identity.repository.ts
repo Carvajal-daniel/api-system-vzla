@@ -146,6 +146,9 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
         email: CompanyTable.email,
         passwordHash: CompanyTable.password,
         isActive: CompanyTable.isActive,
+        avatarUrl: CompanyTable.avatarUrl,
+        operatingDays: CompanyTable.operatingDays,
+        operatingSchedule: CompanyTable.operatingSchedule,
       })
       .from(CompanyTable)
       .where(eq(CompanyTable.id, companyId))
@@ -167,6 +170,9 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
       email: company.email,
       passwordHash: company.passwordHash,
       isActive: company.isActive,
+      avatarUrl: company.avatarUrl ?? null,
+      operatingDays: company.operatingDays ?? null,
+      operatingSchedule: (company.operatingSchedule as AuthOwnerRecord["operatingSchedule"]) ?? null,
     };
   }
 
@@ -181,6 +187,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
         companyName: CompanyTable.companyName,
         companyTimezone: CompanyTable.timezone,
         companyIsActive: CompanyTable.isActive,
+        companyAvatarUrl: CompanyTable.avatarUrl,
         name: CollaboratorTable.name,
         phone: CollaboratorTable.phone,
         email: CollaboratorTable.email,
@@ -188,6 +195,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
         specialty: CollaboratorTable.specialty,
         commissionPercentage: CollaboratorTable.commissionPercentage,
         isActive: CollaboratorTable.isActive,
+        avatarUrl: CollaboratorTable.avatarUrl,
       })
       .from(CollaboratorTable)
       .innerJoin(CompanyTable, eq(CollaboratorTable.companyId, CompanyTable.id))
@@ -211,6 +219,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
       companyName: collaborator.companyName,
       companyTimezone: collaborator.companyTimezone,
       companyIsActive: collaborator.companyIsActive,
+      companyAvatarUrl: collaborator.companyAvatarUrl,
       name: collaborator.name,
       phone: collaborator.phone,
       email: collaborator.email,
@@ -218,6 +227,74 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
       specialty: collaborator.specialty,
       commissionPercentage: Number(collaborator.commissionPercentage),
       isActive: collaborator.isActive,
+      avatarUrl: collaborator.avatarUrl ?? null,
     };
+  }
+
+  async updateOwnerProfile(
+    companyId: string,
+    data: {
+      name?: string;
+      companyName?: string;
+      avatarUrl?: string | null;
+      operatingDays?: string | null;
+      operatingSchedule?: AuthOwnerRecord["operatingSchedule"];
+    },
+  ): Promise<void> {
+    await db
+      .update(CompanyTable)
+      .set({
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.companyName !== undefined ? { companyName: data.companyName } : {}),
+        ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
+        ...(data.operatingDays !== undefined ? { operatingDays: data.operatingDays } : {}),
+        ...(data.operatingSchedule !== undefined
+          ? { operatingSchedule: data.operatingSchedule }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(CompanyTable.id, companyId));
+  }
+
+  async updateCollaboratorProfile(
+    collaboratorId: string,
+    companyId: string,
+    data: { name?: string; avatarUrl?: string | null },
+  ): Promise<void> {
+    await db
+      .update(CollaboratorTable)
+      .set({
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
+      })
+      .where(
+        and(
+          eq(CollaboratorTable.id, collaboratorId),
+          eq(CollaboratorTable.companyId, companyId),
+        ),
+      );
+  }
+
+  async updateOwnerPassword(companyId: string, passwordHash: string): Promise<void> {
+    await db
+      .update(CompanyTable)
+      .set({ password: passwordHash, updatedAt: new Date() })
+      .where(eq(CompanyTable.id, companyId));
+  }
+
+  async updateCollaboratorPassword(
+    collaboratorId: string,
+    companyId: string,
+    passwordHash: string,
+  ): Promise<void> {
+    await db
+      .update(CollaboratorTable)
+      .set({ password: passwordHash })
+      .where(
+        and(
+          eq(CollaboratorTable.id, collaboratorId),
+          eq(CollaboratorTable.companyId, companyId),
+        ),
+      );
   }
 }

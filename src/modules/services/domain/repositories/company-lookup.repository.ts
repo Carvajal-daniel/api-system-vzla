@@ -3,6 +3,14 @@ export interface PublicCompanySummary {
   companyName: string;
   timezone: string;
   isActive: boolean;
+  avatarUrl?: string | null | undefined;
+  operatingDays?: string | null | undefined;
+  operatingSchedule?: Array<{
+    dayOfWeek: number;
+    isOpen: boolean;
+    openTime: string | null;
+    closeTime: string | null;
+  }> | null | undefined;
 }
 
 export interface CompanyLookupRepository {

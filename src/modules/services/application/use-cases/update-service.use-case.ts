@@ -33,6 +33,7 @@ export class UpdateServiceUseCase {
       description: input.description,
       durationMinutes: input.durationMinutes,
       priceInCents: input.priceInCents,
+      imageUrl: input.imageUrl,
     });
 
     if (input.name !== undefined) {

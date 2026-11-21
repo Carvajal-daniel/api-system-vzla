@@ -3,6 +3,7 @@ import type { CreateServiceUseCase } from "../../../application/use-cases/create
 import type { ListCompanyServicesUseCase } from "../../../application/use-cases/list-company-services.use-case.js";
 import type { UpdateServiceStatusUseCase } from "../../../application/use-cases/update-service-status.use-case.js";
 import type { UpdateServiceUseCase } from "../../../application/use-cases/update-service.use-case.js";
+import type { ServicesRepository } from "../../../domain/repositories/services.repository.js";
 import {
   createServiceBodySchema,
   serviceIdParamSchema,
@@ -15,6 +16,7 @@ export interface ServicesControllerDeps {
   listCompanyServicesUseCase: ListCompanyServicesUseCase;
   updateServiceUseCase: UpdateServiceUseCase;
   updateServiceStatusUseCase: UpdateServiceStatusUseCase;
+  servicesRepository?: ServicesRepository;
 }
 
 export class ServicesController {
@@ -69,5 +71,31 @@ export class ServicesController {
     });
 
     return reply.status(200).send(service);
+  }
+
+  async remove(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.actor || request.actor.role !== "OWNER") {
+      return reply.status(403).send({ message: "You do not have permission to perform this action." });
+    }
+
+    const { serviceId } = serviceIdParamSchema.parse(request.params);
+    const repo = this.deps.servicesRepository;
+    if (!repo?.deleteInCompany) {
+      return reply.status(501).send({ message: "Service deletion is not supported." });
+    }
+
+    const result = await repo.deleteInCompany(serviceId, request.actor.companyId);
+
+    if (result === "not_found") {
+      return reply.status(404).send({ message: "Service not found." });
+    }
+    if (result === "has_appointments") {
+      return reply.status(409).send({
+        message:
+          "Cannot delete a service with linked appointments. Deactivate the service instead.",
+      });
+    }
+
+    return reply.status(204).send();
   }
 }

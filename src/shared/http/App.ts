@@ -8,6 +8,7 @@ import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/route
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
+import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.routes.js";
 import { getCorsOrigins, isProduction } from "../config/env.js";
 import { registerErrorHandler } from "./error-handler.js";
 
@@ -17,7 +18,7 @@ const app = fastify({
 
 // Habilita CORS controlado por variável de ambiente para consumo seguro pelo frontend web.
 app.register(fastifyCors, {
-  origin: getCorsOrigins(),
+  origin: getCorsOrigins() ? getCorsOrigins() : true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 });
@@ -55,5 +56,6 @@ app.register(CollaboratorRoutes);
 app.register(servicesRoutes);
 app.register(workSchedulesRoutes);
 app.register(appointmentsRoutes);
+app.register(financeRoutes);
 
 export { app };

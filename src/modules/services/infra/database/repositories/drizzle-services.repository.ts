@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
+import { AppointmentTable } from "../../../../appointments/infra/database/schema/appointments-schema.js";
 import { ServiceEntity } from "../../../domain/entities/service.entity.js";
 import { ServiceNameAlreadyExistsError } from "../../../domain/errors/service-errors.js";
 import type { ServicesRepository } from "../../../domain/repositories/services.repository.js";
@@ -34,6 +35,7 @@ function toDomain(row: ServiceRow): ServiceEntity {
     durationMinutes: row.durationMinutes,
     priceInCents: row.priceInCents,
     active: row.active,
+    imageUrl: row.imageUrl,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -100,6 +102,7 @@ export class DrizzleServicesRepository implements ServicesRepository {
         durationMinutes: service.durationMinutes,
         priceInCents: service.priceInCents,
         active: service.active,
+        imageUrl: service.imageUrl,
         createdAt: service.createdAt,
         updatedAt: service.updatedAt,
       });
@@ -121,6 +124,7 @@ export class DrizzleServicesRepository implements ServicesRepository {
           durationMinutes: service.durationMinutes,
           priceInCents: service.priceInCents,
           active: service.active,
+          imageUrl: service.imageUrl,
           updatedAt: service.updatedAt,
         })
         .where(
@@ -129,6 +133,42 @@ export class DrizzleServicesRepository implements ServicesRepository {
     } catch (error) {
       if (isPgUniqueViolation(error)) {
         throw new ServiceNameAlreadyExistsError();
+      }
+      throw error;
+    }
+  }
+
+  async deleteInCompany(
+    id: string,
+    companyId: string,
+  ): Promise<"deleted" | "not_found" | "has_appointments"> {
+    // Bloqueia exclusão física de serviços que possuam agendamentos vinculados para manter o histórico intacto.
+    const linked = await db
+      .select({ id: AppointmentTable.id })
+      .from(AppointmentTable)
+      .where(
+        and(
+          eq(AppointmentTable.companyId, companyId),
+          eq(AppointmentTable.serviceId, id),
+        ),
+      )
+      .limit(1);
+
+    if (linked.length > 0) {
+      return "has_appointments";
+    }
+
+    try {
+      const deleted = await db
+        .delete(ServiceTable)
+        .where(and(eq(ServiceTable.id, id), eq(ServiceTable.companyId, companyId)))
+        .returning({ id: ServiceTable.id });
+
+      return deleted.length > 0 ? "deleted" : "not_found";
+    } catch (error) {
+      const candidate = error as { code?: unknown; cause?: { code?: unknown } };
+      if (candidate?.code === "23503" || candidate?.cause?.code === "23503") {
+        return "has_appointments";
       }
       throw error;
     }

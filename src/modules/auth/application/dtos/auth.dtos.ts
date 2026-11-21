@@ -37,12 +37,21 @@ export interface OwnerProfileDTO {
   readonly name: string;
   readonly email: string;
   readonly phone: string;
+  readonly avatarUrl: string | null;
   readonly isActive: boolean;
   readonly company: {
     readonly id: string;
     readonly companyName: string;
     readonly timezone: string;
     readonly isActive: boolean;
+    readonly avatarUrl?: string | null;
+    readonly operatingDays?: string | null;
+    readonly operatingSchedule?: Array<{
+      dayOfWeek: number;
+      isOpen: boolean;
+      openTime: string | null;
+      closeTime: string | null;
+    }> | null;
   };
 }
 
@@ -53,6 +62,7 @@ export interface CollaboratorProfileDTO {
   readonly name: string;
   readonly email: string;
   readonly phone: string;
+  readonly avatarUrl: string | null;
   readonly specialty: string;
   readonly commissionPercentage: number;
   readonly isActive: boolean;
@@ -61,6 +71,7 @@ export interface CollaboratorProfileDTO {
     readonly companyName: string;
     readonly timezone: string;
     readonly isActive: boolean;
+    readonly avatarUrl: string | null;
   };
 }
 

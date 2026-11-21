@@ -14,6 +14,7 @@ export interface ServiceProps {
   durationMinutes: number;
   priceInCents: number;
   active: boolean;
+  imageUrl?: string | null | undefined;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,6 +25,7 @@ export interface CreateServiceProps {
   description?: string | null | undefined;
   durationMinutes: number;
   priceInCents: number;
+  imageUrl?: string | null | undefined;
 }
 
 export interface UpdateServiceProps {
@@ -31,6 +33,7 @@ export interface UpdateServiceProps {
   description?: string | null | undefined;
   durationMinutes?: number | undefined;
   priceInCents?: number | undefined;
+  imageUrl?: string | null | undefined;
 }
 
 const MAX_NAME_LENGTH = 120;
@@ -97,6 +100,7 @@ export class ServiceEntity {
     const description = ServiceEntity.validateDescription(input.description);
     const durationMinutes = ServiceEntity.validateDuration(input.durationMinutes);
     const priceInCents = ServiceEntity.validatePrice(input.priceInCents);
+    const imageUrl = input.imageUrl?.trim() || null;
     const now = new Date();
 
     return new ServiceEntity({
@@ -107,6 +111,7 @@ export class ServiceEntity {
       durationMinutes,
       priceInCents,
       active: true,
+      imageUrl,
       createdAt: now,
       updatedAt: now,
     });
@@ -136,6 +141,9 @@ export class ServiceEntity {
     this.props.description = nextDescription;
     this.props.durationMinutes = nextDuration;
     this.props.priceInCents = nextPrice;
+    if (input.imageUrl !== undefined) {
+      this.props.imageUrl = input.imageUrl?.trim() || null;
+    }
     this.props.updatedAt = new Date();
   }
 
@@ -174,6 +182,10 @@ export class ServiceEntity {
 
   get active(): boolean {
     return this.props.active;
+  }
+
+  get imageUrl(): string | null {
+    return this.props.imageUrl ?? null;
   }
 
   get createdAt(): Date {

@@ -7,4 +7,8 @@ export interface ServicesRepository {
   findActiveByCompany(companyId: string): Promise<ServiceEntity[]>;
   create(service: ServiceEntity): Promise<void>;
   save(service: ServiceEntity): Promise<void>;
+  deleteInCompany?(
+    id: string,
+    companyId: string,
+  ): Promise<"deleted" | "not_found" | "has_appointments">;
 }

@@ -9,6 +9,14 @@ export interface AuthOwnerRecord {
   readonly email: string;
   readonly passwordHash: string;
   readonly isActive: boolean;
+  readonly avatarUrl?: string | null;
+  readonly operatingDays?: string | null;
+  readonly operatingSchedule?: Array<{
+    dayOfWeek: number;
+    isOpen: boolean;
+    openTime: string | null;
+    closeTime: string | null;
+  }> | null;
 }
 
 export interface AuthCollaboratorRecord {
@@ -18,6 +26,7 @@ export interface AuthCollaboratorRecord {
   readonly companyName: string;
   readonly companyTimezone: string;
   readonly companyIsActive: boolean;
+  readonly companyAvatarUrl?: string | null;
   readonly name: string;
   readonly phone: string;
   readonly email: string;
@@ -25,6 +34,7 @@ export interface AuthCollaboratorRecord {
   readonly specialty: string;
   readonly commissionPercentage: number;
   readonly isActive: boolean;
+  readonly avatarUrl?: string | null;
 }
 
 export type AuthIdentityRecord = AuthOwnerRecord | AuthCollaboratorRecord;
@@ -51,4 +61,30 @@ export interface AuthIdentityRepository {
     collaboratorId: string,
     companyId: string,
   ): Promise<AuthCollaboratorRecord | null>;
+  updateOwnerProfile?(
+    companyId: string,
+    data: {
+      name?: string;
+      companyName?: string;
+      avatarUrl?: string | null;
+      operatingDays?: string | null;
+      operatingSchedule?: Array<{
+        dayOfWeek: number;
+        isOpen: boolean;
+        openTime: string | null;
+        closeTime: string | null;
+      }> | null;
+    },
+  ): Promise<void>;
+  updateCollaboratorProfile?(
+    collaboratorId: string,
+    companyId: string,
+    data: { name?: string; avatarUrl?: string | null },
+  ): Promise<void>;
+  updateOwnerPassword?(companyId: string, passwordHash: string): Promise<void>;
+  updateCollaboratorPassword?(
+    collaboratorId: string,
+    companyId: string,
+    passwordHash: string,
+  ): Promise<void>;
 }

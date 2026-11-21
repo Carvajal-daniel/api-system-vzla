@@ -1,10 +1,19 @@
 import type { DailyWorkScheduleData } from "../services/availability-calculator.js";
 
+export interface CompanyOperatingDaySchedule {
+  dayOfWeek: number;
+  isOpen: boolean;
+  openTime: string | null;
+  closeTime: string | null;
+}
+
 export interface ActiveCompanyContext {
   id: string;
   companyName: string;
   timezone: string;
   isActive: boolean;
+  operatingDays?: string | null | undefined;
+  operatingSchedule?: CompanyOperatingDaySchedule[] | null | undefined;
 }
 
 export interface ActiveServiceContext {

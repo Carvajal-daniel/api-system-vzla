@@ -37,6 +37,7 @@ export function makeServicesController(
     listCompanyServicesUseCase: new ListCompanyServicesUseCase(servicesRepository),
     updateServiceUseCase: new UpdateServiceUseCase(servicesRepository),
     updateServiceStatusUseCase: new UpdateServiceStatusUseCase(servicesRepository),
+    servicesRepository,
   });
 }
 

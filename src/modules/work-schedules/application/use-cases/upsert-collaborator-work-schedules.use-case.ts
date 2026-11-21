@@ -24,7 +24,13 @@ export class UpsertCollaboratorWorkSchedulesUseCase {
     actor: ActorContext,
     input: UpsertCollaboratorWorkSchedulesInputDTO,
   ): Promise<WorkScheduleOutputDTO[]> {
-    if (actor.role !== "OWNER") {
+    // Permite OWNER configurar qualquer colaborador da empresa ou COLLABORATOR editar apenas sua própria grade
+    const isOwner = actor.role === "OWNER";
+    const isOwnCollaborator =
+      actor.role === "COLLABORATOR" &&
+      actor.collaboratorId === input.collaboratorId;
+
+    if (!isOwner && !isOwnCollaborator) {
       throw new UnauthorizedWorkScheduleActionError();
     }
 

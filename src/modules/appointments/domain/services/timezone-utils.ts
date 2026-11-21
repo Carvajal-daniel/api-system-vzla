@@ -7,7 +7,7 @@ import {
 export const DEFAULT_COMPANY_TIMEZONE = "America/Caracas";
 
 const LOCAL_DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
-const LOCAL_TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const LOCAL_TIME_REGEX = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
 
 export interface LocalDateParts {
   year: number;

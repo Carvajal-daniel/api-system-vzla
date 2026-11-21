@@ -43,6 +43,7 @@ export interface CalculateCollaboratorSlotsInput {
     name: string;
   };
   workSchedule: DailyWorkScheduleData | null;
+  companyOperatingHours?: { openTime: string; closeTime: string } | null;
   blocks: readonly TimeRange[];
   activeAppointments: readonly TimeRange[];
 }
@@ -81,8 +82,35 @@ export class AvailabilityCalculator {
       return [];
     }
 
-    const workStart = parseLocalTimeString(schedule.startTime);
-    const workEnd = parseLocalTimeString(schedule.endTime);
+    let workStart = parseLocalTimeString(schedule.startTime);
+    let workEnd = parseLocalTimeString(schedule.endTime);
+
+    // Se a barbearia/salão definiu horário de funcionamento para hoje, intersecta os limites
+    if (input.companyOperatingHours) {
+      const compOpen = parseLocalTimeString(input.companyOperatingHours.openTime);
+      const compClose = parseLocalTimeString(input.companyOperatingHours.closeTime);
+
+      const compOpenMinutes = compOpen.hour * 60 + compOpen.minute;
+      const compCloseMinutes = compClose.hour * 60 + compClose.minute;
+      const workStartMinutes = workStart.hour * 60 + workStart.minute;
+      const workEndMinutes = workEnd.hour * 60 + workEnd.minute;
+
+      const effectiveStartMinutes = Math.max(workStartMinutes, compOpenMinutes);
+      const effectiveEndMinutes = Math.min(workEndMinutes, compCloseMinutes);
+
+      if (effectiveStartMinutes >= effectiveEndMinutes) {
+        return [];
+      }
+
+      workStart = {
+        hour: Math.floor(effectiveStartMinutes / 60),
+        minute: effectiveStartMinutes % 60,
+      };
+      workEnd = {
+        hour: Math.floor(effectiveEndMinutes / 60),
+        minute: effectiveEndMinutes % 60,
+      };
+    }
 
     const windows: TimeRange[] = [];
 

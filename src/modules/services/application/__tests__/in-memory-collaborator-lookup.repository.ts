@@ -35,4 +35,10 @@ export class InMemoryCollaboratorLookupRepository implements CollaboratorLookupR
       .filter((item) => item.companyId === companyId && item.isActive && idSet.has(item.id))
       .map((item) => ({ ...item }));
   }
+
+  async findAllActiveInCompany(companyId: string): Promise<CollaboratorSummary[]> {
+    return this.items
+      .filter((item) => item.companyId === companyId && item.isActive)
+      .map((item) => ({ ...item }));
+  }
 }

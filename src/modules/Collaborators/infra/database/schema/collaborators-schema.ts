@@ -11,4 +11,5 @@ export const CollaboratorTable = pgTable("collaborators", {
   specialty: text("specialty").notNull(),
   commissionPercentage: numeric("commission_percentage", { mode: "number" }).notNull(),
   isActive: boolean("is_active").notNull().default(true),
+  avatarUrl: text("avatar_url"),
 });

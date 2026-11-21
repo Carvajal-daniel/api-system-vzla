@@ -9,6 +9,7 @@ export interface CollaboratorOutputDTO {
   readonly commissionPercentage: number;
   readonly isActive: boolean;
   readonly role: "COLLABORATOR";
+  readonly avatarUrl?: string | null;
 }
 
 export class ListCompanyCollaboratorsUseCase {
@@ -26,6 +27,7 @@ export class ListCompanyCollaboratorsUseCase {
       commissionPercentage: record.commissionPercentage,
       isActive: record.isActive,
       role: "COLLABORATOR",
+      avatarUrl: record.avatarUrl ?? null,
     }));
   }
 }

@@ -71,6 +71,7 @@ export class DrizzleCollaboratorLookupRepository implements CollaboratorLookupRe
         name: CollaboratorTable.name,
         specialty: CollaboratorTable.specialty,
         isActive: CollaboratorTable.isActive,
+        avatarUrl: CollaboratorTable.avatarUrl,
       })
       .from(CollaboratorTable)
       .where(
@@ -78,6 +79,25 @@ export class DrizzleCollaboratorLookupRepository implements CollaboratorLookupRe
           eq(CollaboratorTable.companyId, companyId),
           eq(CollaboratorTable.isActive, true),
           inArray(CollaboratorTable.id, collaboratorIds),
+        ),
+      );
+  }
+
+  async findAllActiveInCompany(companyId: string): Promise<CollaboratorSummary[]> {
+    return db
+      .select({
+        id: CollaboratorTable.id,
+        companyId: CollaboratorTable.companyId,
+        name: CollaboratorTable.name,
+        specialty: CollaboratorTable.specialty,
+        isActive: CollaboratorTable.isActive,
+        avatarUrl: CollaboratorTable.avatarUrl,
+      })
+      .from(CollaboratorTable)
+      .where(
+        and(
+          eq(CollaboratorTable.companyId, companyId),
+          eq(CollaboratorTable.isActive, true),
         ),
       );
   }

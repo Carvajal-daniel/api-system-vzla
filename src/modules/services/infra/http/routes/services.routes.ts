@@ -75,6 +75,19 @@ export async function servicesRoutes(
     servicesController.updateStatus.bind(servicesController),
   );
 
+  app.delete(
+    "/services/:serviceId",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["Services (Owner)"],
+        summary: "Delete a service if it has no linked appointments",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    servicesController.remove.bind(servicesController),
+  );
+
   app.get(
     "/services/:serviceId/collaborators",
     {
