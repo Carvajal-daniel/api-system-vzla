@@ -127,6 +127,30 @@ describe("Appointments & Availability Use Cases", () => {
     );
   });
 
+  it("uses the replacement professional's commission rate after reassignment", async () => {
+    const startsAt = localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil);
+    const created = await createAppointment.executeInternal({
+      actor: ownerA,
+      serviceId: "service-cut",
+      collaboratorId: "collab-a1",
+      startsAt,
+      clientName: "Cliente",
+      clientPhone: "+5511987654321",
+      now,
+    });
+    expect(created.commissionPercentageSnapshot).toBe(40);
+    const reassigned = await rescheduleAppointment.execute({
+      actor: ownerA,
+      appointmentId: created.id,
+      collaboratorId: "collab-a2",
+      startsAt,
+      now,
+    });
+    expect(reassigned.collaboratorId).toBe("collab-a2");
+    expect(reassigned.commissionPercentageSnapshot).toBe(50);
+    expect(reassigned.servicePriceInCentsSnapshot).toBe(created.servicePriceInCentsSnapshot);
+  });
+
   it("creates public appointment as PENDING with derived endsAt and immutable snapshots", async () => {
     const startsAt = localDateTimeToUtc(2026, 11, 25, 9, 0, tzBrazil);
 
@@ -415,7 +439,15 @@ describe("Appointments & Availability Use Cases", () => {
     });
     expect(confirmed.status).toBe("CONFIRMED");
 
+    await expect(updateStatus.execute({
+      actor: collabA1,
+      appointmentId: created.id,
+      status: "COMPLETED",
+      now: new Date(Date.parse(rescheduled.startsAt) - 1),
+    })).rejects.toThrow("Cannot complete an appointment before its scheduled date and time.");
+
     const completed = await updateStatus.execute({
+      now: new Date(rescheduled.startsAt),
       actor: collabA1,
       appointmentId: created.id,
       status: "COMPLETED",

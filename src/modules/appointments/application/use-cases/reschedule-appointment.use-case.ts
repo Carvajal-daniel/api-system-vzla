@@ -93,7 +93,11 @@ export class RescheduleAppointmentUseCase {
       blocks: blocks.map((b) => b.toTimeRange()),
     });
 
-    appointment.reschedule(input.startsAt, targetCollaboratorId);
+    appointment.reschedule(
+      input.startsAt,
+      targetCollaboratorId,
+      targetCollaboratorId === appointment.collaboratorId ? undefined : enabledCollaborator.commissionPercentage,
+    );
     await this.appointmentsRepository.rescheduleWithLock(appointment);
 
     return toAppointmentOutputDTO(appointment);

@@ -1,4 +1,5 @@
 import {
+  AppointmentCompletionTooEarlyError,
   AppointmentNotFoundError,
   UnauthorizedSchedulingActionError,
 } from "../../domain/errors/appointment-errors.js";
@@ -35,8 +36,13 @@ export class UpdateAppointmentStatusUseCase {
       throw new UnauthorizedSchedulingActionError();
     }
 
+    const { startsAt, status, collaboratorId } = appointment;
+    if (input.status === "COMPLETED" && startsAt > (input.now ?? new Date())) {
+      throw new AppointmentCompletionTooEarlyError();
+    }
+
     appointment.transitionStatus(input.status, input.cancellationReason ?? null);
-    await this.appointmentsRepository.save(appointment);
+    await this.appointmentsRepository.save(appointment, { startsAt, status, collaboratorId });
 
     return toAppointmentOutputDTO(appointment);
   }

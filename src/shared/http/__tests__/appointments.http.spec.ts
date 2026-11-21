@@ -320,6 +320,17 @@ describe("Appointments, Availability & Schedule Blocks HTTP Layer (JWT, RBAC, Mu
     expect(ownerBooking.statusCode).toBe(201);
     expect(ownerBooking.json().status).toBe("CONFIRMED");
 
+    const earlyCompletion = await testApp.inject({
+      method: "PATCH",
+      url: `/appointments/${ownerBooking.json().id}/status`,
+      headers: { authorization: `Bearer ${collabBrToken}` },
+      payload: { status: "COMPLETED" },
+    });
+    expect(earlyCompletion.statusCode).toBe(400);
+    expect(earlyCompletion.json().message).toBe(
+      "Cannot complete an appointment before its scheduled date and time.",
+    );
+
     // 5. Isolamento multi-tenant: OWNER da Venezuela não vê nem altera agendamento do Brasil
     const crossTenantStatus = await testApp.inject({
       method: "PATCH",

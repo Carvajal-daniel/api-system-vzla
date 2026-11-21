@@ -1,4 +1,4 @@
-﻿{
+{
   "version": "7",
   "dialect": "postgresql",
   "entries": [
@@ -36,7 +36,48 @@
       "when": 1795199119097,
       "tag": "0004_appointments_and_schedule_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795260000000,
+      "tag": "0005_company_monthly_goal",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795261541957,
+      "tag": "0006_finance_collections",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795263286353,
+      "tag": "0007_finance_outflows",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795264952367,
+      "tag": "0008_finance_expense_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795265884950,
+      "tag": "0009_commission_deductions",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795267071855,
+      "tag": "0010_inventory_and_imports",
+      "breakpoints": true
     }
-    ,{ "idx": 5, "version": "7", "when": 1795260000000, "tag": "0005_company_monthly_goal", "breakpoints": true }
   ]
 }

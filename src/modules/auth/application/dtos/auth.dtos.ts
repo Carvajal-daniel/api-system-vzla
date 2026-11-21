@@ -43,6 +43,7 @@ export interface OwnerProfileDTO {
     readonly id: string;
     readonly companyName: string;
     readonly timezone: string;
+    readonly currency: "BRL" | "USD";
     readonly isActive: boolean;
     readonly avatarUrl?: string | null;
     readonly operatingDays?: string | null;
@@ -70,6 +71,7 @@ export interface CollaboratorProfileDTO {
     readonly id: string;
     readonly companyName: string;
     readonly timezone: string;
+    readonly currency: "BRL" | "USD";
     readonly isActive: boolean;
     readonly avatarUrl: string | null;
   };

@@ -22,7 +22,10 @@ export interface AppointmentsRepository {
    */
   rescheduleWithLock(appointment: Appointment): Promise<void>;
 
-  save(appointment: Appointment): Promise<void>;
+  save(
+    appointment: Appointment,
+    expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+  ): Promise<void>;
 
   findById(companyId: string, appointmentId: string): Promise<Appointment | null>;
 

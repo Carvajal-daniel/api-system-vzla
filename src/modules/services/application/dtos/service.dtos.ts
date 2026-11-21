@@ -102,6 +102,7 @@ export interface PublicCompanyInfoDTO {
   id: string;
   companyName: string;
   timezone: string;
+  currency?: "BRL" | "USD";
   avatarUrl?: string | null;
   operatingDays?: string | null;
   operatingSchedule?: Array<{

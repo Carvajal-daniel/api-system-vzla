@@ -1,4 +1,6 @@
-﻿import { boolean, pgTable, text, timestamp, uuid, index, varchar, jsonb, integer } from "drizzle-orm/pg-core";
+﻿import { boolean, pgTable, text, timestamp, uuid, index, varchar, jsonb, integer, check, date } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import type { Currency } from "../../../../finance/domain/collections.js";
 
 export const CompanyTable = pgTable("companies", { 
 
@@ -32,6 +34,8 @@ export const CompanyTable = pgTable("companies", {
   // Grade semanal detalhada da empresa (horÃ¡rios de abertura e fechamento por dia)
   operatingSchedule: jsonb("operating_schedule"),
   monthlyGoalInCents: integer("monthly_goal_in_cents").default(0).notNull(),
+  currency: varchar("currency", { length: 3 }).$type<Currency>().default("BRL").notNull(),
+  financeOpenedOn: date("finance_opened_on").default(sql`CURRENT_DATE`).notNull(),
   monthlyGoalCurrency: varchar("monthly_goal_currency", { length: 3 }).default("BRL").notNull(),
   
   // Auditoria (Garantindo Timezone para o cenÃ¡rio de MaturÃ­n/Venezuela VET UTC-4)
@@ -39,6 +43,7 @@ export const CompanyTable = pgTable("companies", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
   return {
+    currencyCheck: check("companies_currency_check", sql`${table.currency} in ('BRL', 'USD')`),
     // Ãndice essencial para validar duplicidade de e-mail no login ou novo cadastro
     emailUniqueIdx: index("companies_email_idx").on(table.email),
   };

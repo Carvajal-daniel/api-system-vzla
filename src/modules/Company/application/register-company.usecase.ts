@@ -1,7 +1,5 @@
-import { NameVO } from '../domain/value-objects/name.value-object.js';
-import { CompanyEntity, type CompanyProps } from '../domain/entities/company.entity.js';
+import { CompanyEntity } from '../domain/entities/company.entity.js';
 import type { CompaniesRepository } from '../domain/repository/companies.repository.interface.js';
-import { CompanyEmail } from '../domain/value-objects/company-email.vo.js';
 import { Password } from '../domain/value-objects/password.vo.js';
 import { CompanyEmailAlreadyInError } from '../domain/errors/email-already-exyst.js';
 import type { RegisterCompanyInputDTO, RegisterCompanyOutputDTO } from './company-dto.js';

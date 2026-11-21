@@ -133,7 +133,7 @@ export class Appointment {
    * Reprograma o agendamento preservando a duração histórica do snapshot e
    * recalculando `endsAt` sempre no backend.
    */
-  reschedule(newStartsAt: Date, newCollaboratorId?: string): void {
+  reschedule(newStartsAt: Date, newCollaboratorId?: string, newCommissionPercentage?: number): void {
     const currentStatus = AppointmentStatus.create(this.props.status);
     if (!currentStatus.isReschedulable()) {
       throw new AppointmentNotReschedulableError(this.props.status);
@@ -147,6 +147,7 @@ export class Appointment {
     this.props = {
       ...this.props,
       collaboratorId: newCollaboratorId ?? this.props.collaboratorId,
+      commissionPercentageSnapshot: newCommissionPercentage ?? this.props.commissionPercentageSnapshot,
       startsAt: timeRange.startsAt,
       endsAt: timeRange.endsAt,
       updatedAt: new Date(),

@@ -58,6 +58,7 @@ export interface UpdateAppointmentStatusInputDTO {
   appointmentId: string;
   status: AppointmentStatusValue;
   cancellationReason?: string | null;
+  now?: Date;
 }
 
 export interface RescheduleAppointmentInputDTO {

@@ -27,6 +27,7 @@ export class ListPublicCompanyCatalogUseCase {
       id: company.id,
       companyName: company.companyName,
       timezone: company.timezone,
+      ...(company.currency ? { currency: company.currency } : {}),
       avatarUrl: company.avatarUrl ?? null,
       operatingDays: company.operatingDays ?? null,
       operatingSchedule: company.operatingSchedule ?? null,

@@ -1,12 +1,14 @@
 import { and, asc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { Appointment } from "../../../domain/entities/appointment.entity.js";
-import { AppointmentTimeConflictError } from "../../../domain/errors/appointment-errors.js";
+import { AppointmentChangedError, AppointmentTimeConflictError } from "../../../domain/errors/appointment-errors.js";
 import type {
   AppointmentsRepository,
   ListAppointmentsFilter,
 } from "../../../domain/repositories/appointments.repository.js";
 import type { AppointmentStatusValue } from "../../../domain/value-objects/appointment-status.vo.js";
+import { FinancialDocumentTable } from "../../../../finance/infra/database/schema/collections-schema.js";
+import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { AppointmentTable } from "../schema/appointments-schema.js";
 
 const ACTIVE_BOOKING_STATUSES: readonly AppointmentStatusValue[] = [
@@ -111,37 +113,68 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
         throw new AppointmentTimeConflictError();
       }
 
-      await tx
+      const updated = await tx
         .update(AppointmentTable)
         .set({
           collaboratorId: appointment.collaboratorId,
           startsAt: appointment.startsAt,
           endsAt: appointment.endsAt,
+          commissionPercentageSnapshot: appointment.commissionPercentageSnapshot,
           updatedAt: appointment.updatedAt,
         })
         .where(
           and(
             eq(AppointmentTable.companyId, appointment.companyId),
             eq(AppointmentTable.id, appointment.id),
+            inArray(AppointmentTable.status, [...ACTIVE_BOOKING_STATUSES]),
           ),
-        );
+        )
+        .returning({ id: AppointmentTable.id });
+      if (!updated.length) throw new AppointmentChangedError();
     });
   }
 
-  async save(appointment: Appointment): Promise<void> {
-    await db
-      .update(AppointmentTable)
-      .set({
-        status: appointment.status,
-        cancellationReason: appointment.cancellationReason,
-        updatedAt: appointment.updatedAt,
-      })
-      .where(
-        and(
+  async save(
+    appointment: Appointment,
+    expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      const completedAt = appointment.status === "COMPLETED" ? appointment.updatedAt : null;
+      const [company] = completedAt
+        ? await tx.select({ currency: CompanyTable.currency }).from(CompanyTable)
+          .where(eq(CompanyTable.id, appointment.companyId)).for("update")
+        : [];
+      const updated = await tx.update(AppointmentTable)
+        .set({
+          status: appointment.status,
+          completedAt,
+          cancellationReason: appointment.cancellationReason,
+          updatedAt: appointment.updatedAt,
+        })
+        .where(and(
           eq(AppointmentTable.companyId, appointment.companyId),
           eq(AppointmentTable.id, appointment.id),
-        ),
-      );
+          eq(AppointmentTable.status, expected.status),
+          eq(AppointmentTable.startsAt, expected.startsAt),
+          eq(AppointmentTable.collaboratorId, expected.collaboratorId),
+        )).returning({ id: AppointmentTable.id });
+      if (!updated.length) throw new AppointmentChangedError();
+
+      if (completedAt && company) {
+        const netInCents = appointment.servicePriceInCentsSnapshot;
+        const generatedCommissionInCents = Math.round(netInCents * appointment.commissionPercentageSnapshot / 100);
+        await tx.insert(FinancialDocumentTable).values({
+          companyId: appointment.companyId,
+          appointmentId: appointment.id,
+          currency: company.currency,
+          netInCents,
+          generatedCommissionInCents,
+        }).onConflictDoUpdate({
+          target: [FinancialDocumentTable.companyId, FinancialDocumentTable.appointmentId],
+          set: { generatedCommissionInCents },
+        });
+      }
+    });
   }
 
   async findById(

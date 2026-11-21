@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -33,7 +34,8 @@ export const AppointmentTable = pgTable(
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("PENDING"),
     cancellationReason: text("cancellation_reason"),
-    // Snapshots imutáveis capturados no momento da reserva para preservar histórico financeiro.
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    // Preserve the booked service; the commission rate is refreshed when the professional changes.
     serviceNameSnapshot: text("service_name_snapshot").notNull(),
     servicePriceInCentsSnapshot: integer(
       "service_price_in_cents_snapshot",
@@ -54,6 +56,7 @@ export const AppointmentTable = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("appointments_company_id_unique").on(table.companyId, table.id),
     check(
       "appointments_time_range_chk",
       sql`${table.endsAt} > ${table.startsAt}`,

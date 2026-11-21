@@ -8,6 +8,9 @@ import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/route
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
+import { collectionRoutes } from "../../modules/finance/infra/http/routes/collection.routes.js";
+import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.routes.js";
+import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
 import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.routes.js";
 import { getCorsOrigins, isProduction } from "../config/env.js";
 import { registerErrorHandler } from "./error-handler.js";
@@ -57,5 +60,8 @@ app.register(servicesRoutes);
 app.register(workSchedulesRoutes);
 app.register(appointmentsRoutes);
 app.register(financeRoutes);
+app.register(collectionRoutes);
+app.register(outflowRoutes);
+app.register(inventoryRoutes);
 
 export { app };

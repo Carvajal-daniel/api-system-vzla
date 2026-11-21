@@ -165,6 +165,7 @@ export const getMeOpenApiSchema = {
             id: { type: "string", format: "uuid" },
             companyName: { type: "string" },
             timezone: { type: "string" },
+            currency: { type: "string", enum: ["BRL", "USD"] },
             isActive: { type: "boolean" },
             avatarUrl: { type: "string", nullable: true },
           },

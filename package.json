@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev": "tsx watch src/shared/http/server.ts"
+    "dev": "tsx watch src/shared/http/server.ts",
+    "lint": "eslint src drizzle.config.ts vitest.config.ts"
   },
   "keywords": [],
   "author": "",
@@ -31,8 +32,10 @@
     "@types/node": "^25.9.1",
     "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
+    "eslint": "10",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
+    "typescript-eslint": "8",
     "vite": "^8.3.8",
     "vitest": "^5.1.1"
   }
