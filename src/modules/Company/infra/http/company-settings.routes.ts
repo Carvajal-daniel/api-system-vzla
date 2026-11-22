@@ -8,7 +8,7 @@ import { authenticate, authorizeRoles } from "../../../../shared/http/auth/authe
 import { CompanyTable } from "../database/schema/companies-schema.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
 import { CollaboratorReviewTable } from "../../../Collaborators/infra/database/schema/collaborator-reviews-schema.js";
-import { appearanceSchema, ClientProfileFieldsTable, CompanySettingsTable, defaults, privateClientFieldKeys, publicClientFields, settingsPatchSchema, settingsSchema, SurveyTable, type Settings } from "../database/schema/company-settings-schema.js";
+import { appearanceSchema, ClientProfileFieldsTable, CompanySettingsTable, defaults, publicClientFields, selectedClientFields, settingsPatchSchema, settingsSchema, SurveyTable, type Settings } from "../database/schema/company-settings-schema.js";
 
 async function readCompanySettings(companyId: string): Promise<Settings> {
   const [row] = await db.select({ preferences: CompanySettingsTable.preferences }).from(CompanySettingsTable)
@@ -44,8 +44,12 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const [company] = await db.select({ id: CompanyTable.id }).from(CompanyTable)
       .where(and(eq(CompanyTable.id, companyId), eq(CompanyTable.isActive, true)));
     if (!company) return reply.code(404).send({ message: "Empresa não encontrada." });
-    const { reminders: _reminders, onlinePayment: _payment, packageSales: _packages, customClientFields: _custom, clientFields, ...publicSettings } = await snapshot(companyId);
-    return { ...publicSettings, clientFields: publicClientFields.parse(clientFields) };
+    const { reminders: _reminders, onlinePayment: _payment, packageSales: _packages, customClientFields, clientFields, ...publicSettings } = await snapshot(companyId);
+    const active = selectedClientFields({ clientFields, customClientFields, clientFieldSlots: publicSettings.clientFieldSlots });
+    const ids = new Set(active.map(({ id }) => id));
+    return { ...publicSettings, clientFields: { ...publicClientFields.parse(clientFields), ...Object.fromEntries(active.map(({ id, mode }) => [id, mode])) },
+      customClientFields: customClientFields.filter(({ id }) => ids.has(id)) };
+
   });
 
   app.get("/companies/me/settings", owner, (request) => snapshot(request.actor!.companyId));
@@ -102,7 +106,8 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const { clientId } = clientParams.parse(request.params);
     const [row] = await db.select({ values: ClientProfileFieldsTable.values }).from(ClientProfileFieldsTable)
       .where(and(eq(ClientProfileFieldsTable.companyId, request.actor!.companyId), eq(ClientProfileFieldsTable.clientId, clientId)));
-    return { values: row?.values ?? {} };
+    const active = selectedClientFields(await readCompanySettings(request.actor!.companyId));
+    return { values: Object.fromEntries(active.flatMap(({ id }) => row?.values[id] !== undefined ? [[id, row.values[id]]] : [])) };
   });
 
   app.patch("/companies/me/client-profiles/:clientId", owner, async (request, reply) => {
@@ -110,18 +115,17 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const companyId = request.actor!.companyId;
     const { values } = z.object({ values: z.record(z.string().max(60), z.string().trim().max(2500)) }).parse(request.body);
     const settings = await readCompanySettings(companyId);
-    const editable = new Map([...privateClientFieldKeys].map((key) => [key, settings.clientFields[key] ?? "optional"] as const));
-    for (const field of settings.customClientFields) editable.set(field.id, field.mode);
+    const editable = new Map(selectedClientFields(settings).map(({ id, mode }) => [id, mode]));
     for (const [key, mode] of editable) {
       if (mode === "required" && !values[key]) return reply.code(400).send({ message: "Preencha os campos obrigatórios da ficha." });
     }
-    const filtered = Object.fromEntries(Object.entries(values).filter(([key]) => editable.has(key) && editable.get(key) !== "hidden"));
+    const filtered = Object.fromEntries(Object.entries(values).filter(([key]) => editable.has(key)));
     const [row] = await db.insert(ClientProfileFieldsTable).values({ companyId, clientId, values: filtered })
       .onConflictDoUpdate({
         target: [ClientProfileFieldsTable.companyId, ClientProfileFieldsTable.clientId],
         set: { values: sql`${ClientProfileFieldsTable.values} || excluded.values` },
       }).returning({ values: ClientProfileFieldsTable.values });
-    return { values: row?.values ?? filtered };
+    return { values: Object.fromEntries(Object.entries(row?.values ?? filtered).filter(([key]) => editable.has(key))) };
   });
 
   app.get("/companies/me/client-booking-data", owner, (request) =>

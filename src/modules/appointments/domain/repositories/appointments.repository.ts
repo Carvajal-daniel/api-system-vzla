@@ -10,6 +10,7 @@ export interface ListAppointmentsFilter {
 }
 
 export interface BookingClientData {
+  [field: string]: string | undefined;
   birthDate?: string | undefined;
   document?: string | undefined;
   email?: string | undefined;

@@ -64,7 +64,7 @@ const clientDataSchema = z.object({
   email: z.email().max(254).optional(),
   gender: z.enum(["FEMALE", "MALE", "OTHER"]).optional(),
   source: z.enum(["instagram", "referral", "google", "walk-in"]).optional(),
-});
+}).catchall(z.string().trim().max(2500)).refine((fields) => Object.keys(fields).length <= 37);
 
 // Payload público nunca aceita endsAt nem status — ambos são derivados/impostos pelo backend.
 export const createPublicAppointmentBodySchema = z.object({

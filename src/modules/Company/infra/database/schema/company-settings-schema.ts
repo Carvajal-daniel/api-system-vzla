@@ -5,8 +5,16 @@ import { AppointmentTable } from "../../../../appointments/infra/database/schema
 
 const mode = z.enum(["required", "optional", "hidden"]);
 export const publicClientFields = z.object({ birthDate: mode, document: mode, email: mode, gender: mode, source: mode });
-export const privateClientFieldKeys = new Set(["clientAddress","clientDistrict","clientCity","clientState","clientPostalCode","hairType","pigmentation","hairLength","elasticity","porosity","volume","strandThickness","resistance","allergies","allergyNotes","medication","pathology","currentTreatments","observations"]);
+export const privateClientFieldKeys = new Set(["clientAddress","clientNumber","clientComplement","clientDistrict","clientCity","clientState","clientPostalCode","hairType","pigmentation","hairLength","elasticity","porosity","volume","strandThickness","resistance","allergies","allergyNotes","medication","soughtDoctor","diagnosis","pathology","pathologyNotes","currentTreatments","observations"]);
 const customId = z.string().regex(/^custom_[a-zA-Z0-9_-]{1,48}$/);
+const registrationKeys = ["email", "birthDate", "document"] as const;
+const slotKey = z.string().max(56).refine((key) => registrationKeys.some((id) => id === key) ||
+  privateClientFieldKeys.has(key) || customId.safeParse(key).success, "Campo de cliente desconhecido.");
+const clientFieldSlots = z.array(slotKey.nullable()).min(4).max(32).refine((slots) => {
+  const selected = slots.filter(Boolean);
+  return new Set(selected).size === selected.length;
+}, "Selecione cada campo apenas uma vez.");
+const placeId = z.string().regex(/^[A-Za-z0-9_-]{1,255}$/);
 const clientFields = publicClientFields.catchall(mode);
 const mapsUrl = z.string().trim().max(2048).url().refine((raw) => {
   if (!URL.canParse(raw)) return false;
@@ -24,7 +32,8 @@ const onlinePayment = z.object({
 const reminders = z.object({
   enabled: z.boolean(), hours: z.literal([1, 2, 4, 24]),
   template: z.enum(["buttons", "plain", "whatsapp", "external", "custom"]),
-  message: z.string().trim().max(1500), externalUrl: z.string().max(2048).refine((value) => !value || /^https:\/\/[^\s]+$/i.test(value)),
+  servicePhone: z.string().regex(/^\+[1-9]\d{9,14}$/).or(z.literal("")).optional(),
+  message: z.string().max(1500), externalUrl: z.string().max(2048).refine((value) => !value || /^https:\/\/[^\s]+$/i.test(value)),
 }).refine((value) => !value.enabled || (value.template !== "custom" || !!value.message) &&
   (value.template !== "external" || !!value.externalUrl), "Complete o modelo de lembrete.");
 const customClientFields = z.array(z.object({
@@ -39,6 +48,8 @@ export const settingsSchema = z.object({
   bookingInterval: z.literal([0, 15, 20, 30, 60]),
   leadTime: z.literal([0, 30, 60, 120, 1440]),
   clientFields,
+  clientFieldSlots: clientFieldSlots.nullable(),
+  googlePlaceId: placeId.nullable(),
   birthdayRadar: z.boolean(),
   surveyEnabled: z.boolean(),
   googleMapsUrl: mapsUrl.nullable(),
@@ -54,7 +65,7 @@ export const defaults: Settings = {
   address: null, agendaInterval: 30, bookingInterval: 0, leadTime: 0,
   clientFields: { birthDate: "optional", document: "optional", email: "optional", gender: "optional", source: "optional" },
   birthdayRadar: false, surveyEnabled: false,
-  googleMapsUrl: null, googleRating: null, googleReviewsCount: null,
+  googleMapsUrl: null, googleRating: null, googleReviewsCount: null, googlePlaceId: null, clientFieldSlots: null,
   reminders: null, onlinePayment: null, packageSales: null, customClientFields: [],
 };
 
@@ -72,7 +83,25 @@ const clientFieldsPatch = publicClientFields.partial().catchall(mode).refine((fi
   Object.keys(fields).every((key) => Object.hasOwn(publicClientFields.shape, key) || privateClientFieldKeys.has(key)),
   "Campo de cliente desconhecido.",
 );
-export const settingsPatchSchema = settingsSchema.partial().extend({ clientFields: clientFieldsPatch.optional() });
+export const settingsPatchSchema = settingsSchema.partial().extend({
+  clientFields: clientFieldsPatch.optional(),
+  reminders: reminders.refine((value) =>
+    (value.template !== "whatsapp" || !!value.servicePhone) && (value.template !== "external" || !!value.externalUrl),
+    "Complete o telefone de atendimento ou o link do modelo.").nullable().optional(),
+});
+
+export function selectedClientFields(preferences: z.infer<typeof settingsPatchSchema> | null | undefined) {
+  const modes = preferences?.clientFields;
+  const custom = preferences?.customClientFields ?? [];
+  const supported = [...registrationKeys, ...privateClientFieldKeys, ...custom.map(({ id }) => id)];
+  const slots = preferences?.clientFieldSlots ?? supported.filter((key) =>
+    (modes?.[key] ?? custom.find(({ id }) => id === key)?.mode) === "required");
+  return slots.flatMap((key) => {
+    if (!key || !supported.includes(key)) return [];
+    const current = modes?.[key] ?? custom.find(({ id }) => id === key)?.mode;
+    return [{ id: key, mode: current === "required" ? "required" as const : "optional" as const }];
+  });
+}
 
 export const CompanySettingsTable = pgTable("company_settings", {
   companyId: uuid("company_id").primaryKey().references(() => CompanyTable.id, { onDelete: "cascade" }),

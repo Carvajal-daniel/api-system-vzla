@@ -1,4 +1,3 @@
-import type { BookingClientData } from "./appointments.repository.js";
 import type { DailyWorkScheduleData } from "../services/availability-calculator.js";
 
 export interface CompanyOperatingDaySchedule {
@@ -17,7 +16,7 @@ export interface ActiveCompanyContext {
   agendaInterval?: number;
   bookingInterval?: number;
   leadTime?: number;
-  clientFields?: Record<keyof BookingClientData, "required" | "optional" | "hidden">;
+  clientFields?: Record<string, "required" | "optional" | "hidden">;
   operatingSchedule?: CompanyOperatingDaySchedule[] | null | undefined;
 }
 

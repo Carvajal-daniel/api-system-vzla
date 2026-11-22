@@ -1,3 +1,7 @@
+export function getGoogleMapsApiKey(): string | undefined {
+  return process.env.GOOGLE_MAPS_API_KEY?.trim() || undefined;
+}
+
 export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET?.trim();
 

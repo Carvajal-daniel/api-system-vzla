@@ -87,10 +87,14 @@ export class CreateAppointmentUseCase {
 
     const details = params.publicDetails ? { ...params.publicDetails, clientData: { ...params.publicDetails.clientData } } : undefined;
     if (params.publicBooking && company.clientFields) {
-      for (const field of Object.keys(company.clientFields) as Array<keyof typeof company.clientFields>) {
-        const mode = company.clientFields[field];
+      for (const [field, mode] of Object.entries(company.clientFields)) {
         if (mode === "required" && !details?.clientData[field]) throw new InvalidBookingClientDataError();
-        if (mode === "hidden" && details) delete details.clientData[field];
+      }
+      if (details) {
+        for (const field of Object.keys(details.clientData)) {
+          const selected = Object.hasOwn(company.clientFields, field) && company.clientFields[field] !== "hidden";
+          if (!selected) delete details.clientData[field];
+        }
       }
     }
 
