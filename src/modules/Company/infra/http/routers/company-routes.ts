@@ -94,7 +94,7 @@ export async function ComapnyRoutes(app: FastifyInstance) {
     if (!actor || actor.role !== "OWNER") {
       throw new CollectionsError("FORBIDDEN", "FINANCE_OWNER_REQUIRED");
     }
-    const { currency } = z.object({ currency: z.enum(["BRL", "USD"]) }).parse(request.body);
+    const { currency } = z.object({ currency: z.enum(["BRL", "USD", "VES"]) }).parse(request.body);
     const updated = await db.transaction(async (tx) => {
       const [company] = await tx.select({ currency: CompanyTable.currency }).from(CompanyTable)
         .where(eq(CompanyTable.id, actor.companyId)).for("update");
@@ -135,12 +135,12 @@ export async function ComapnyRoutes(app: FastifyInstance) {
     "/companies/me/monthly-goal",
     {
       preHandler: [authenticate, authorizeRoles("OWNER")],
-      schema: { body: { type: "object", required: ["monthlyGoalInCents", "currency"], properties: { monthlyGoalInCents: { type: "integer", minimum: 0 }, currency: { type: "string", enum: ["BRL", "USD"] } } } },
+      schema: { body: { type: "object", required: ["monthlyGoalInCents", "currency"], properties: { monthlyGoalInCents: { type: "integer", minimum: 0 }, currency: { type: "string", enum: ["BRL", "USD", "VES"] } } } },
     },
     async (request, reply) => {
       const actor = request.actor;
       if (!actor || actor.role !== "OWNER") return reply.status(403).send({ message: "You do not have permission to perform this action." });
-      const body = z.object({ monthlyGoalInCents: z.number().int().min(0).max(2147483647), currency: z.enum(["BRL", "USD"]) }).parse(request.body);
+      const body = z.object({ monthlyGoalInCents: z.number().int().min(0).max(2147483647), currency: z.enum(["BRL", "USD", "VES"]) }).parse(request.body);
       const [company] = await db.update(CompanyTable).set({ monthlyGoalInCents: body.monthlyGoalInCents, monthlyGoalCurrency: body.currency, updatedAt: new Date() }).where(and(eq(CompanyTable.id, actor.companyId), eq(CompanyTable.currency, body.currency))).returning({ monthlyGoalInCents: CompanyTable.monthlyGoalInCents, currency: CompanyTable.currency });
       if (!company) throw new CollectionsError("CONFLICT", "FINANCE_GOAL_CURRENCY_MISMATCH");
       return reply.status(200).send(company);

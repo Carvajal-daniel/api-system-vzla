@@ -5,6 +5,7 @@ import { AppointmentChangedError, AppointmentTimeConflictError } from "../../../
 import type {
   AppointmentsRepository,
   ListAppointmentsFilter,
+  PublicBookingDetails,
 } from "../../../domain/repositories/appointments.repository.js";
 import type { AppointmentStatusValue } from "../../../domain/value-objects/appointment-status.vo.js";
 import { FinancialDocumentTable } from "../../../../finance/infra/database/schema/collections-schema.js";
@@ -41,7 +42,7 @@ function mapRowToEntity(
 }
 
 export class DrizzleAppointmentsRepository implements AppointmentsRepository {
-  async createWithLock(appointment: Appointment): Promise<void> {
+  async createWithLock(appointment: Appointment, details?: PublicBookingDetails): Promise<void> {
     const lockKey = `${appointment.companyId}:${appointment.collaboratorId}`;
 
     await db.transaction(async (tx) => {
@@ -73,6 +74,8 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
         serviceId: appointment.serviceId,
         clientName: appointment.clientName,
         clientPhone: appointment.clientPhone,
+        clientData: details?.clientData ?? null,
+        cancellationDigest: details?.cancellationDigest ?? null,
         startsAt: appointment.startsAt,
         endsAt: appointment.endsAt,
         status: appointment.status,

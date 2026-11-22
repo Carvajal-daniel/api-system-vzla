@@ -58,6 +58,14 @@ export const ownerAvailabilityQuerySchema = availabilityQuerySchema.omit({ date:
   appointmentId: z.string().uuid().optional(),
 });
 
+const clientDataSchema = z.object({
+  birthDate: z.iso.date().refine((date) => date <= new Date().toISOString().slice(0, 10)).optional(),
+  document: z.string().trim().min(1).max(32).optional(),
+  email: z.email().max(254).optional(),
+  gender: z.enum(["FEMALE", "MALE", "OTHER"]).optional(),
+  source: z.enum(["instagram", "referral", "google", "walk-in"]).optional(),
+});
+
 // Payload público nunca aceita endsAt nem status — ambos são derivados/impostos pelo backend.
 export const createPublicAppointmentBodySchema = z.object({
   serviceId: z.string().uuid("Invalid serviceId."),
@@ -65,6 +73,7 @@ export const createPublicAppointmentBodySchema = z.object({
   startsAt: isoDateTimeSchema,
   clientName: z.string().trim().min(2, "Client name is too short.").max(120),
   clientPhone: z.string().trim().min(10, "Invalid phone number.").max(30),
+  clientData: clientDataSchema.optional(),
 });
 
 // Payload interno do OWNER permite escolher initialStatus (PENDING ou CONFIRMED), mas nunca endsAt.

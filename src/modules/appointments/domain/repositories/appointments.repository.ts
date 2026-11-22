@@ -9,12 +9,25 @@ export interface ListAppointmentsFilter {
   status?: AppointmentStatusValue | undefined;
 }
 
+export interface BookingClientData {
+  birthDate?: string | undefined;
+  document?: string | undefined;
+  email?: string | undefined;
+  gender?: "FEMALE" | "MALE" | "OTHER" | undefined;
+  source?: string | undefined;
+}
+
+export interface PublicBookingDetails {
+  clientData: BookingClientData;
+  cancellationDigest: string;
+}
+
 export interface AppointmentsRepository {
   /**
    * Cria o agendamento de forma atômica sob lock exclusivo por (companyId, collaboratorId),
    * rejeitando com AppointmentTimeConflictError caso exista qualquer agendamento ativo sobreposto.
    */
-  createWithLock(appointment: Appointment): Promise<void>;
+  createWithLock(appointment: Appointment, details?: PublicBookingDetails): Promise<void>;
 
   /**
    * Reprograma o agendamento de forma atômica sob lock exclusivo por (companyId, collaboratorId),

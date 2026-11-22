@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -14,6 +15,8 @@ import {
 import { CollaboratorTable } from "../../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { ServiceTable } from "../../../../services/infra/database/schema/services-schema.js";
+
+import type { BookingClientData } from "../../../domain/repositories/appointments.repository.js";
 
 export const AppointmentTable = pgTable(
   "appointments",
@@ -30,6 +33,8 @@ export const AppointmentTable = pgTable(
       .references(() => ServiceTable.id, { onDelete: "restrict" }),
     clientName: text("client_name").notNull(),
     clientPhone: text("client_phone").notNull(),
+    clientData: jsonb("client_data").$type<BookingClientData>(),
+    cancellationDigest: text("cancellation_digest"),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("PENDING"),

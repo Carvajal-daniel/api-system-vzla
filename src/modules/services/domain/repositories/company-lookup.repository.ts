@@ -2,7 +2,7 @@ export interface PublicCompanySummary {
   id: string;
   companyName: string;
   timezone: string;
-  currency?: "BRL" | "USD";
+  currency?: "BRL" | "USD" | "VES";
   isActive: boolean;
   avatarUrl?: string | null | undefined;
   operatingDays?: string | null | undefined;

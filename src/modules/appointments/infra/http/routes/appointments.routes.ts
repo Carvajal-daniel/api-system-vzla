@@ -242,10 +242,11 @@ export async function appointmentsRoutes(
             startsAt: { type: "string", format: "date-time" },
             clientName: { type: "string", minLength: 2, maxLength: 120 },
             clientPhone: { type: "string", minLength: 10, maxLength: 30 },
+            clientData: { type: "object" },
           },
         },
         response: {
-          201: appointmentOpenApiSchema,
+          201: { ...appointmentOpenApiSchema, properties: { ...appointmentOpenApiSchema.properties, cancellationToken: { type: "string" } } },
           400: errorOpenApiSchema,
           404: errorOpenApiSchema,
           409: errorOpenApiSchema,

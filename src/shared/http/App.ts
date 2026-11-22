@@ -8,6 +8,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
 import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
+import { companySettingsRoutes } from "../../modules/Company/infra/http/company-settings.routes.js";
 import { ComapnyRoutes } from "../../modules/Company/infra/http/routers/company-routes.js";
 import { collectionRoutes } from "../../modules/finance/infra/http/routes/collection.routes.js";
 import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.routes.js";
@@ -72,6 +73,7 @@ if (!isProduction()) {
 
 app.register(authRoutes);
 app.register(ComapnyRoutes);
+app.register(companySettingsRoutes);
 app.register(CollaboratorRoutes);
 app.register(servicesRoutes);
 app.register(workSchedulesRoutes);

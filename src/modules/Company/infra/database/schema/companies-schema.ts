@@ -52,7 +52,7 @@ export const CompanyTable = pgTable("companies", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
   return {
-    currencyCheck: check("companies_currency_check", sql`${table.currency} in ('BRL', 'USD')`),
+    currencyCheck: check("companies_currency_check", sql`${table.currency} in ('BRL', 'USD', 'VES')`),
     // Ãndice essencial para validar duplicidade de e-mail no login ou novo cadastro
     emailUniqueIdx: index("companies_email_idx").on(table.email),
   };

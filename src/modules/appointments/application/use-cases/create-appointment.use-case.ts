@@ -1,14 +1,15 @@
 import { Appointment } from "../../domain/entities/appointment.entity.js";
 import {
   CollaboratorNotEnabledForServiceError,
+  InvalidBookingClientDataError,
   SchedulingCompanyNotFoundError,
   SchedulingServiceNotFoundError,
   UnauthorizedSchedulingActionError,
 } from "../../domain/errors/appointment-errors.js";
-import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
+import type { AppointmentsRepository, PublicBookingDetails } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator, getCompanyHours } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
 import type { InitialAppointmentStatusValue } from "../../domain/value-objects/appointment-status.vo.js";
 import {
@@ -36,6 +37,8 @@ export class CreateAppointmentUseCase {
       clientName: input.clientName,
       clientPhone: input.clientPhone,
       initialStatus: "PENDING",
+      publicBooking: true,
+      publicDetails: input.publicDetails,
       now: input.now ?? new Date(),
     });
   }
@@ -73,11 +76,22 @@ export class CreateAppointmentUseCase {
     clientPhone: string;
     initialStatus: InitialAppointmentStatusValue;
     notes?: string | undefined;
+    publicBooking?: boolean;
+    publicDetails?: PublicBookingDetails | undefined;
     now: Date;
   }): Promise<AppointmentOutputDTO> {
     const company = await this.lookupRepository.findCompanyById(params.companyId);
     if (!company || !company.isActive) {
       throw new SchedulingCompanyNotFoundError();
+    }
+
+    const details = params.publicDetails ? { ...params.publicDetails, clientData: { ...params.publicDetails.clientData } } : undefined;
+    if (params.publicBooking && company.clientFields) {
+      for (const field of Object.keys(company.clientFields) as Array<keyof typeof company.clientFields>) {
+        const mode = company.clientFields[field];
+        if (mode === "required" && !details?.clientData[field]) throw new InvalidBookingClientDataError();
+        if (mode === "hidden" && details) delete details.clientData[field];
+      }
     }
 
     const service = await this.lookupRepository.findServiceById(
@@ -123,7 +137,8 @@ export class CreateAppointmentUseCase {
       startsAt: params.startsAt,
       serviceDurationMinutes: service.durationMinutes,
       timezone: company.timezone,
-      now: params.now,
+      now: new Date(params.now.getTime() + (params.publicBooking ? company.leadTime ?? 0 : 0) * 60_000),
+      step: companySlotStep(company, params.publicBooking),
       workSchedule,
       companyOperatingHours: getCompanyHours(company, localStart.dayOfWeek),
       blocks: blocks.map((b) => b.toTimeRange()),
@@ -145,7 +160,7 @@ export class CreateAppointmentUseCase {
     });
 
     // Persistência atômica sob lock exclusivo por (companyId, collaboratorId) contra double-booking.
-    await this.appointmentsRepository.createWithLock(appointment);
+    await this.appointmentsRepository.createWithLock(appointment, details);
 
     return toAppointmentOutputDTO(appointment);
   }

@@ -60,6 +60,9 @@ export class AuthController {
       await this.authIdentityRepository.updateOwnerProfile(actor.companyId, {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.companyName !== undefined ? { companyName: body.companyName } : {}),
+        ...(body.phone !== undefined ? { phone: body.phone } : {}),
+        ...(body.operatingDays !== undefined ? { operatingDays: body.operatingDays } : {}),
+        ...(body.operatingSchedule !== undefined ? { operatingSchedule: body.operatingSchedule?.map((day) => ({ ...day, openTime: day.openTime ?? null, closeTime: day.closeTime ?? null })) ?? null } : {}),
         ...(body.avatarUrl !== undefined ? { avatarUrl: body.avatarUrl } : {}),
       });
     } else {

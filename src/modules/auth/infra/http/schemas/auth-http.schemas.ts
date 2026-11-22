@@ -38,6 +38,7 @@ export const updateProfileBodySchema = z
   .object({
     name: nameSchema.optional(),
     companyName: companyNameSchema.optional(),
+    phone: z.string().regex(/^\+[1-9]\d{9,14}$/).optional(),
     avatarUrl: avatarUrlSchema.nullable().optional(),
     operatingDays: z.string().trim().max(100).nullable().optional(),
     operatingSchedule: z
@@ -45,10 +46,10 @@ export const updateProfileBodySchema = z
         z.object({
           dayOfWeek: z.number().int().min(0).max(6),
           isOpen: z.boolean(),
-          openTime: z.string().nullable().optional(),
-          closeTime: z.string().nullable().optional(),
-        }),
-      )
+          openTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+          closeTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+        }).refine((day) => !day.isOpen || !!(day.openTime && day.closeTime && day.openTime < day.closeTime), { message: "Invalid opening hours." }),
+      ).max(7).refine((days) => new Set(days.map((day) => day.dayOfWeek)).size === days.length, { message: "Duplicate weekday." })
       .nullable()
       .optional(),
   })
@@ -58,7 +59,7 @@ export const updateProfileBodySchema = z
 
 export const updatePasswordBodySchema = z.object({
   currentPassword: z.string().min(1, "Current password is required."),
-  newPassword: passwordSchema,
+  newPassword: passwordSchema.regex(/[^\p{L}\p{N}\s]/u, "Inclua um caractere especial na senha."),
 });
 
 const errorResponseSchema = {
@@ -165,7 +166,7 @@ export const getMeOpenApiSchema = {
             id: { type: "string", format: "uuid" },
             companyName: { type: "string" },
             timezone: { type: "string" },
-            currency: { type: "string", enum: ["BRL", "USD"] },
+            currency: { type: "string", enum: ["BRL", "USD", "VES"] },
             isActive: { type: "boolean" },
             avatarUrl: { type: "string", nullable: true },
             operatingDays: { type: "string", nullable: true },

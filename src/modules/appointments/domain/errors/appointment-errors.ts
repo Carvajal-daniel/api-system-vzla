@@ -23,6 +23,12 @@ export class InvalidLocalDateError extends DomainError {
   }
 }
 
+export class InvalidBookingClientDataError extends DomainError {
+  constructor() {
+    super("Preencha todos os dados obrigatórios.", "VALIDATION");
+  }
+}
+
 export class InvalidClientNameError extends DomainError {
   constructor(message = "Client name must contain at least 2 characters.") {
     super(message, "VALIDATION");
@@ -51,8 +57,8 @@ export class AppointmentCompletionTooEarlyError extends DomainError {
 }
 
 export class AppointmentSlotAlignmentError extends DomainError {
-  constructor() {
-    super("Appointment must start on a 30-minute boundary.", "VALIDATION");
+  constructor(step = 30) {
+    super(`Appointment must start on a ${step}-minute boundary.`, "VALIDATION");
   }
 }
 

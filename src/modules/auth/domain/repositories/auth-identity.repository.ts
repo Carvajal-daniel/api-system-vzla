@@ -4,7 +4,7 @@ export interface AuthOwnerRecord {
   readonly companyId: string;
   readonly companyName: string;
   readonly companyTimezone: string;
-  readonly companyCurrency?: "BRL" | "USD";
+  readonly companyCurrency?: "BRL" | "USD" | "VES";
   readonly name: string;
   readonly phone: string;
   readonly email: string;
@@ -26,7 +26,7 @@ export interface AuthCollaboratorRecord {
   readonly companyId: string;
   readonly companyName: string;
   readonly companyTimezone: string;
-  readonly companyCurrency?: "BRL" | "USD";
+  readonly companyCurrency?: "BRL" | "USD" | "VES";
   readonly companyIsActive: boolean;
   readonly companyAvatarUrl?: string | null;
   readonly companyOperatingDays?: string | null;
@@ -70,6 +70,7 @@ export interface AuthIdentityRepository {
     data: {
       name?: string;
       companyName?: string;
+      phone?: string;
       avatarUrl?: string | null;
       operatingDays?: string | null;
       operatingSchedule?: Array<{

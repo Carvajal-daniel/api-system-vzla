@@ -216,7 +216,7 @@ export async function servicesRoutes(
                 properties: {
                   id: { type: "string", format: "uuid" },
                   companyName: { type: "string" },
-                  currency: { type: "string", enum: ["BRL", "USD"] },
+                  currency: { type: "string", enum: ["BRL", "USD", "VES"] },
                   timezone: { type: "string" },
                 },
               },

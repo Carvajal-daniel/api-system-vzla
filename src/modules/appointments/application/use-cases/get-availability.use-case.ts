@@ -8,7 +8,7 @@ import {
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { EnabledCollaboratorForServiceContext, SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator, DEFAULT_SLOT_STEP_MINUTES, getCompanyHours } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { assertValidIanaTimeZone, getLocalDayUtcBounds, parseLocalDateString } from "../../domain/services/timezone-utils.js";
 import type { GetAvailabilityInputDTO, GetAvailabilityOutputDTO } from "../dtos/availability.dtos.js";
 
@@ -45,10 +45,12 @@ export class GetAvailabilityUseCase {
       const bounds = getLocalDayUtcBounds(date, timezone);
       return { date, ...bounds, hours: getCompanyHours(company, bounds.dayOfWeek) };
     });
+    const publicBooking = input.actorSource === "PUBLIC";
+    const step = companySlotStep(company, publicBooking);
     const empty = (date: string): GetAvailabilityOutputDTO => ({
-      companyId, serviceId, date, timezone, slotStepMinutes: DEFAULT_SLOT_STEP_MINUTES, serviceDurationMinutes: 0, slots: [],
+      companyId, serviceId, date, timezone, slotStepMinutes: step, serviceDurationMinutes: 0, slots: [],
     });
-    const now = input.now ?? new Date();
+    const now = new Date((input.now ?? new Date()).getTime() + (publicBooking ? company.leadTime ?? 0 : 0) * 60_000);
     const open = days.filter((day) => day.hours !== false && day.endUtc > now);
     if (days.every((day) => day.hours === false)) return dates.map(empty);
 
@@ -86,7 +88,7 @@ export class GetAvailabilityUseCase {
       const appointmentRanges = appointments.filter((row) => row.id !== existing?.id).map((row) => row.toTimeRange());
       for (const day of open) {
         const slots = AvailabilityCalculator.calculateSlotsForCollaborator({
-          date: day.date, timezone, serviceDurationMinutes: duration, now,
+          date: day.date, timezone, serviceDurationMinutes: duration, now, step,
           collaborator: { id, name: person.collaboratorName }, workSchedule: scheduleByDay.get(day.dayOfWeek) ?? null,
           companyOperatingHours: day.hours || null, blocks: blockRanges, activeAppointments: appointmentRanges,
         });

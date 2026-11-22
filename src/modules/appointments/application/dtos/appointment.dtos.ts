@@ -1,4 +1,5 @@
 import type { ActorContext } from "../../../../shared/auth/actor-context.js";
+import type { PublicBookingDetails } from "../../domain/repositories/appointments.repository.js";
 import type { Appointment } from "../../domain/entities/appointment.entity.js";
 import type {
   AppointmentStatusValue,
@@ -38,6 +39,7 @@ export interface CreatePublicAppointmentInputDTO {
   startsAt: Date;
   clientName: string;
   clientPhone: string;
+  publicDetails?: PublicBookingDetails | undefined;
   now?: Date | undefined;
   actorSource?: SchedulingActorSource | undefined;
 }

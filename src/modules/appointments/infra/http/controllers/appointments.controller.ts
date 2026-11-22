@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { CreateAppointmentUseCase } from "../../../application/use-cases/create-appointment.use-case.js";
@@ -33,6 +34,7 @@ export class AppointmentsController {
 
     const availability = await this.getAvailabilityUseCase.execute({
       companyId,
+      actorSource: "PUBLIC",
       serviceId: query.serviceId,
       date: query.date,
       collaboratorId: query.collaboratorId,
@@ -63,6 +65,7 @@ export class AppointmentsController {
   async createPublic(request: FastifyRequest, reply: FastifyReply) {
     const { companyId } = companyIdParamSchema.parse(request.params);
     const body = createPublicAppointmentBodySchema.parse(request.body);
+    const cancellationToken = randomBytes(32).toString("base64url");
 
     const appointment = await this.createAppointmentUseCase.executePublic({
       companyId,
@@ -71,9 +74,10 @@ export class AppointmentsController {
       startsAt: body.startsAt,
       clientName: body.clientName,
       clientPhone: body.clientPhone,
+      publicDetails: { clientData: body.clientData ?? {}, cancellationDigest: createHash("sha256").update(cancellationToken).digest("hex") },
     });
 
-    return reply.status(201).send(appointment);
+    return reply.status(201).send({ ...appointment, cancellationToken });
   }
 
   async createInternal(request: FastifyRequest, reply: FastifyReply) {

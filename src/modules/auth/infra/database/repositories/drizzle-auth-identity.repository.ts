@@ -248,6 +248,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
     data: {
       name?: string;
       companyName?: string;
+      phone?: string;
       avatarUrl?: string | null;
       operatingDays?: string | null;
       operatingSchedule?: AuthOwnerRecord["operatingSchedule"];
@@ -258,6 +259,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
       .set({
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.companyName !== undefined ? { companyName: data.companyName } : {}),
+        ...(data.phone !== undefined ? { phone: data.phone } : {}),
         ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
         ...(data.operatingDays !== undefined ? { operatingDays: data.operatingDays } : {}),
         ...(data.operatingSchedule !== undefined

@@ -8,7 +8,7 @@ import {
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator, getCompanyHours } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
 import { AppointmentStatus } from "../../domain/value-objects/appointment-status.vo.js";
 import {
@@ -86,6 +86,7 @@ export class RescheduleAppointmentUseCase {
     ]);
 
     AvailabilityCalculator.validateSlotAvailability({
+      step: companySlotStep(company),
       startsAt: input.startsAt,
       serviceDurationMinutes: durationMinutes,
       timezone: company.timezone,

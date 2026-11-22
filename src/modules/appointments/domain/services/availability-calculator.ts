@@ -12,6 +12,10 @@ import { assertValidIanaTimeZone, getLocalDateTimeParts, localDateTimeToUtc, par
 
 export const DEFAULT_SLOT_STEP_MINUTES = 30;
 
+export function companySlotStep(company: ActiveCompanyContext, publicBooking = false) {
+  return (publicBooking ? company.bookingInterval : 0) || company.agendaInterval || DEFAULT_SLOT_STEP_MINUTES;
+}
+
 export interface DailyWorkScheduleData {
   dayOfWeek: number;
   isWorkingDay: boolean;
@@ -44,6 +48,7 @@ interface SlotContext {
   timezone: string;
   serviceDurationMinutes: number;
   now: Date;
+  step?: number | undefined;
   workSchedule: DailyWorkScheduleData | null;
   companyOperatingHours?: CompanyHours;
   blocks: readonly TimeRange[];
@@ -83,7 +88,7 @@ export class AvailabilityCalculator {
     const instant = (minute: number) => localDateTimeToUtc(year, month, day, Math.floor(minute / 60), minute % 60, timezone);
     const end = instant(bounds.end);
     const pause = bounds.pause ? TimeRange.create(instant(bounds.pause.start), instant(bounds.pause.end)) : null;
-    const step = DEFAULT_SLOT_STEP_MINUTES;
+    const step = input.step ?? DEFAULT_SLOT_STEP_MINUTES;
     const unavailable = [...input.blocks, ...(input.activeAppointments ?? [])];
     const slots: CalculatedAvailabilitySlot[] = [];
 
@@ -109,8 +114,9 @@ export class AvailabilityCalculator {
 
     const start = getLocalDateTimeParts(startsAt, timezone);
     const end = getLocalDateTimeParts(endsAt, timezone);
-    if (start.minute % DEFAULT_SLOT_STEP_MINUTES !== 0 || start.second !== 0 || startsAt.getMilliseconds() !== 0) {
-      throw new AppointmentSlotAlignmentError();
+    const step = input.step ?? DEFAULT_SLOT_STEP_MINUTES;
+    if (start.minutesFromMidnight % step !== 0 || start.second !== 0 || startsAt.getMilliseconds() !== 0) {
+      throw new AppointmentSlotAlignmentError(step);
     }
     const bounds = workingBounds(input.workSchedule, input.companyOperatingHours);
     const instant = (minute: number) => localDateTimeToUtc(start.year, start.month, start.day, Math.floor(minute / 60), minute % 60, timezone);

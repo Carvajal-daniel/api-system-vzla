@@ -1,3 +1,4 @@
+import { registerPasswordRecovery, type PasswordResetDelivery } from "./password-recovery.routes.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate } from "../../../../../shared/http/auth/authenticate.js";
 import {
@@ -12,9 +13,10 @@ import {
 
 export async function authRoutes(
   app: FastifyInstance,
-  options: AuthControllerDependencies = {},
+  options: AuthControllerDependencies & { passwordResetDelivery?: PasswordResetDelivery } = {},
 ): Promise<void> {
   const authController = makeAuthController(options);
+  registerPasswordRecovery(app, options.passwordResetDelivery);
 
   app.post(
     "/auth/register",

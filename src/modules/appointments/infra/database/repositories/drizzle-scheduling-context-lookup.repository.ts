@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { CollaboratorTable } from "../../../../Collaborators/infra/database/schema/collaborators-schema.js";
+import { CompanySettingsTable, defaults, publicClientFields } from "../../../../Company/infra/database/schema/company-settings-schema.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { CollaboratorServiceTable } from "../../../../services/infra/database/schema/collaborator-services-schema.js";
 import { ServiceTable } from "../../../../services/infra/database/schema/services-schema.js";
@@ -27,8 +28,10 @@ export class DrizzleSchedulingContextLookupRepository
         isActive: CompanyTable.isActive,
         operatingDays: CompanyTable.operatingDays,
         operatingSchedule: CompanyTable.operatingSchedule,
+        preferences: CompanySettingsTable.preferences,
       })
       .from(CompanyTable)
+      .leftJoin(CompanySettingsTable, eq(CompanySettingsTable.companyId, CompanyTable.id))
       .where(eq(CompanyTable.id, companyId))
       .limit(1);
 
@@ -37,6 +40,10 @@ export class DrizzleSchedulingContextLookupRepository
 
     return {
       id: row.id,
+      agendaInterval: row.preferences?.agendaInterval ?? 30,
+      bookingInterval: row.preferences?.bookingInterval ?? 0,
+      leadTime: row.preferences?.leadTime ?? 0,
+      ...(row.preferences?.clientFields ? { clientFields: publicClientFields.parse({ ...defaults.clientFields, ...row.preferences.clientFields }) } : {}),
       companyName: row.companyName,
       timezone: row.timezone,
       isActive: row.isActive,

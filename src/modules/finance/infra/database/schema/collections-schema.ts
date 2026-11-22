@@ -34,7 +34,7 @@ export const FinancialDocumentTable = pgTable("financial_documents", {
     name: "financial_documents_commission_settlement_fk",
   }),
   check("financial_documents_amounts_check", sql`${table.netInCents} >= 0 and ${table.generatedCommissionInCents} between 0 and ${table.netInCents}`),
-  check("financial_documents_currency_check", sql`${table.currency} in ('BRL', 'USD')`),
+  check("financial_documents_currency_check", sql`${table.currency} in ('BRL', 'USD', 'VES')`),
   check("financial_documents_batch_paid_check", sql`${table.commissionSettlementId} is null or ${table.commissionPaidAt} is not null`),
   check("financial_documents_settled_check", sql`(${table.commissionPaidAt} is null) = (${table.commissionPaidBy} is null)`),
 ]);
