@@ -1,5 +1,8 @@
 import type { ActorContext } from "../../../../shared/auth/actor-context.js";
-import type { PublicBookingDetails } from "../../domain/repositories/appointments.repository.js";
+import type {
+  AppointmentAuditLogRecord,
+  PublicBookingDetails,
+} from "../../domain/repositories/appointments.repository.js";
 import type { Appointment } from "../../domain/entities/appointment.entity.js";
 import type {
   AppointmentStatusValue,
@@ -82,6 +85,38 @@ export interface RescheduleAppointmentInputDTO {
   collaboratorId?: string | undefined;
   now?: Date | undefined;
   actorSource?: SchedulingActorSource | undefined;
+}
+
+export interface AppointmentAuditLogOutputDTO {
+  id: string;
+  companyId: string;
+  appointmentId: string;
+  action: string;
+  previousStatus: AppointmentStatusValue;
+  newStatus: AppointmentStatusValue;
+  reason: string;
+  authorizedById: string;
+  authorizedByName: string;
+  authorizedByRole: string;
+  createdAt: string;
+}
+
+export function toAppointmentAuditLogOutputDTO(
+  record: AppointmentAuditLogRecord,
+): AppointmentAuditLogOutputDTO {
+  return {
+    id: record.id,
+    companyId: record.companyId,
+    appointmentId: record.appointmentId,
+    action: record.action,
+    previousStatus: record.previousStatus,
+    newStatus: record.newStatus,
+    reason: record.reason,
+    authorizedById: record.authorizedById,
+    authorizedByName: record.authorizedByName,
+    authorizedByRole: record.authorizedByRole,
+    createdAt: record.createdAt.toISOString(),
+  };
 }
 
 export function toAppointmentOutputDTO(

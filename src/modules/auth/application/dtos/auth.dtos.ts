@@ -1,3 +1,4 @@
+import type { CompanyOperatingDaySchedule } from "../../../appointments/domain/repositories/scheduling-context-lookup.repository.js";
 import type { ActorRole } from "../../../../shared/auth/actor-context.js";
 
 export interface RegisterOwnerInputDTO {
@@ -47,12 +48,7 @@ export interface OwnerProfileDTO {
     readonly isActive: boolean;
     readonly avatarUrl?: string | null;
     readonly operatingDays?: string | null;
-    readonly operatingSchedule?: Array<{
-      dayOfWeek: number;
-      isOpen: boolean;
-      openTime: string | null;
-      closeTime: string | null;
-    }> | null;
+    readonly operatingSchedule?: CompanyOperatingDaySchedule[] | null;
   };
 }
 

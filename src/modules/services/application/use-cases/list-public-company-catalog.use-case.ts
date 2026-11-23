@@ -29,8 +29,8 @@ export class ListPublicCompanyCatalogUseCase {
       timezone: company.timezone,
       ...(company.currency ? { currency: company.currency } : {}),
       avatarUrl: company.avatarUrl ?? null,
-      operatingDays: company.operatingDays ?? null,
-      operatingSchedule: company.operatingSchedule ?? null,
+      ...(company.operatingDays != null ? { operatingDays: company.operatingDays } : {}),
+      ...(company.operatingSchedule != null ? { operatingSchedule: company.operatingSchedule } : {}),
     };
 
     const activeServices = await this.servicesRepository.findActiveByCompany(companyId);

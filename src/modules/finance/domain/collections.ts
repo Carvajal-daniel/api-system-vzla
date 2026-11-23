@@ -6,7 +6,7 @@ export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 export type Currency = "BRL" | "USD" | "VES";
 
 export class CollectionsError extends DomainError {
-  constructor(code: "FORBIDDEN" | "VALIDATION" | "NOT_FOUND" | "CONFLICT", message: string) {
+  constructor(code: "FORBIDDEN" | "UNAUTHORIZED" | "VALIDATION" | "NOT_FOUND" | "CONFLICT", message: string) {
     super(message, code);
   }
 }

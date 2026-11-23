@@ -8,6 +8,7 @@ import {
 } from "../errors/appointment-errors.js";
 import {
   AvailabilityCalculator,
+  getCompanyHours,
   type DailyWorkScheduleData,
 } from "../services/availability-calculator.js";
 import { localDateTimeToUtc } from "../services/timezone-utils.js";
@@ -72,6 +73,28 @@ describe("AvailabilityCalculator", () => {
     expect(slots[0]?.startsAt).toEqual(instant(14 + Math.floor(nextMinute / 60), nextMinute % 60));
     expect(slots.find((slot) => slot.startsAt >= instant(16, 0))?.startsAt).toEqual(instant(16, 30));
     expect(slots.at(-1)?.endsAt).toEqual(instant(17, 20));
+  });
+
+  it("excludes lunch and appointments that extend into the company break", () => {
+    const timezone = "America/Sao_Paulo";
+    const instant = (hour: number, minute = 0) => localDateTimeToUtc(2026, 11, 25, hour, minute, timezone);
+    const companyOperatingHours = getCompanyHours({
+      id: "company", companyName: "Empresa", timezone, isActive: true,
+      operatingSchedule: [{ dayOfWeek: 3, isOpen: true, openTime: "09:00", closeTime: "17:00",
+        shifts: [{ start: "09:00", end: "12:00" }, { start: "13:00", end: "17:00" }] }],
+    }, 3);
+    const context = {
+      timezone, now: instant(8), serviceDurationMinutes: 60,
+      workSchedule: { ...wednesdaySchedule, endTime: "17:00", breakStart: null, breakEnd: null },
+      companyOperatingHours, blocks: [],
+    };
+    const slots = AvailabilityCalculator.calculateSlotsForCollaborator({
+      ...context, date: "2026-11-25", collaborator: { id: "p", name: "Ana" },
+    });
+    expect(slots.filter((slot) => slot.startsAt >= instant(11, 30) && slot.startsAt < instant(13))).toEqual([]);
+    expect(slots.some((slot) => +slot.startsAt === +instant(13))).toBe(true);
+    expect(() => AvailabilityCalculator.validateSlotAvailability({ ...context, startsAt: instant(11, 30) }))
+      .toThrow(AppointmentOutsideWorkScheduleError);
   });
 
   it("excludes past slots and returns empty when service is longer than every free window", () => {

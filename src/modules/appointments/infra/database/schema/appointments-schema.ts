@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -97,6 +98,39 @@ export const AppointmentTable = pgTable(
       table.companyId,
       table.status,
       table.startsAt,
+    ),
+  ],
+);
+
+export const AppointmentAuditLogTable = pgTable(
+  "appointment_audit_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => CompanyTable.id, { onDelete: "cascade" }),
+    appointmentId: uuid("appointment_id").notNull(),
+    action: varchar("action", { length: 40 }).notNull(),
+    previousStatus: varchar("previous_status", { length: 20 }).notNull(),
+    newStatus: varchar("new_status", { length: 20 }).notNull(),
+    reason: text("reason").notNull(),
+    authorizedById: uuid("authorized_by_id").notNull(),
+    authorizedByName: text("authorized_by_name").notNull(),
+    authorizedByRole: varchar("authorized_by_role", { length: 20 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      name: "appointment_audit_logs_appointment_fk",
+      columns: [table.companyId, table.appointmentId],
+      foreignColumns: [AppointmentTable.companyId, AppointmentTable.id],
+    }).onDelete("cascade"),
+    index("appointment_audit_logs_company_appointment_idx").on(
+      table.companyId,
+      table.appointmentId,
+      table.createdAt,
     ),
   ],
 );

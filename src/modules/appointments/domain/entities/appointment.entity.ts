@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   AppointmentNotReschedulableError,
+  AppointmentRevertNotAllowedError,
   AppointmentSnapshotValidationError,
 } from "../errors/appointment-errors.js";
 import {
@@ -128,6 +129,24 @@ export class Appointment {
       ...this.props,
       status: transitioned.value,
       cancellationReason: normalizedReason,
+      updatedAt: new Date(),
+    };
+  }
+
+  /**
+   * Reverte um agendamento concluído (COMPLETED) de volta para CONFIRMED mediante
+   * autorização explícita do dono e justificativa registrada em auditoria.
+   */
+  revertCompletion(): void {
+    if (this.props.status !== "COMPLETED") {
+      throw new AppointmentRevertNotAllowedError(
+        `Cannot revert appointment with status ${this.props.status}.`,
+      );
+    }
+
+    this.props = {
+      ...this.props,
+      status: "CONFIRMED",
       updatedAt: new Date(),
     };
   }

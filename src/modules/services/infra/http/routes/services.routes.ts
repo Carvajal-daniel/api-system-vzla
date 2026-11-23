@@ -218,6 +218,18 @@ export async function servicesRoutes(
                   companyName: { type: "string" },
                   currency: { type: "string", enum: ["BRL", "USD", "VES"] },
                   timezone: { type: "string" },
+                  operatingDays: { type: "string", nullable: true },
+                  operatingSchedule: {
+                    type: "array", nullable: true, items: {
+                      type: "object", properties: {
+                        dayOfWeek: { type: "integer" }, isOpen: { type: "boolean" },
+                        openTime: { type: "string", nullable: true }, closeTime: { type: "string", nullable: true },
+                        shifts: { type: "array", items: { type: "object", properties: {
+                          start: { type: "string" }, end: { type: "string" },
+                        }, required: ["start", "end"] } },
+                      },
+                    },
+                  },
                 },
               },
               services: {

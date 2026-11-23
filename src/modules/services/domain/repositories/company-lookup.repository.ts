@@ -1,3 +1,4 @@
+import type { CompanyOperatingDaySchedule } from "../../../appointments/domain/repositories/scheduling-context-lookup.repository.js";
 export interface PublicCompanySummary {
   id: string;
   companyName: string;
@@ -6,12 +7,7 @@ export interface PublicCompanySummary {
   isActive: boolean;
   avatarUrl?: string | null | undefined;
   operatingDays?: string | null | undefined;
-  operatingSchedule?: Array<{
-    dayOfWeek: number;
-    isOpen: boolean;
-    openTime: string | null;
-    closeTime: string | null;
-  }> | null | undefined;
+  operatingSchedule?: CompanyOperatingDaySchedule[] | null | undefined;
 }
 
 export interface CompanyLookupRepository {

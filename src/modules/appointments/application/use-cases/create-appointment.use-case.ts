@@ -2,6 +2,7 @@ import { Appointment } from "../../domain/entities/appointment.entity.js";
 import {
   CollaboratorNotEnabledForServiceError,
   InvalidBookingClientDataError,
+  InvalidLocalDateError,
   SchedulingCompanyNotFoundError,
   SchedulingServiceNotFoundError,
   UnauthorizedSchedulingActionError,
@@ -9,7 +10,7 @@ import {
 import type { AppointmentsRepository, PublicBookingDetails } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, companySlotStep, getCompanyHours, isWithinPublicBookingWindow } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
 import type { InitialAppointmentStatusValue } from "../../domain/value-objects/appointment-status.vo.js";
 import {
@@ -121,6 +122,9 @@ export class CreateAppointmentUseCase {
       params.startsAt.getTime() + service.durationMinutes * 60_000,
     );
     const localStart = getLocalDateTimeParts(params.startsAt, company.timezone);
+    if (params.publicBooking && !isWithinPublicBookingWindow(company, params.now, localStart.dateString)) {
+      throw new InvalidLocalDateError("O horário está fora do período disponível para agendamento.");
+    }
 
     const [workSchedule, blocks] = await Promise.all([
       this.lookupRepository.findWorkScheduleForDay(

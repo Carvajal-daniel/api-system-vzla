@@ -43,6 +43,7 @@ export class DrizzleSchedulingContextLookupRepository
       agendaInterval: row.preferences?.agendaInterval ?? 30,
       bookingInterval: row.preferences?.bookingInterval ?? 0,
       leadTime: row.preferences?.leadTime ?? 0,
+      maxAdvanceBookingDays: row.preferences?.maxAdvanceBookingDays ?? null,
       clientFields: Object.fromEntries(selectedClientFields(row.preferences).map(({ id, mode }) => [id, mode])),
       companyName: row.companyName,
       timezone: row.timezone,

@@ -5,6 +5,7 @@ import type { CreateAppointmentUseCase } from "../../../application/use-cases/cr
 import type { GetAvailabilityUseCase } from "../../../application/use-cases/get-availability.use-case.js";
 import type { ListAppointmentsUseCase } from "../../../application/use-cases/list-appointments.use-case.js";
 import type { RescheduleAppointmentUseCase } from "../../../application/use-cases/reschedule-appointment.use-case.js";
+import type { RevertCompletedAppointmentUseCase } from "../../../application/use-cases/revert-completed-appointment.use-case.js";
 import type { UpdateAppointmentStatusUseCase } from "../../../application/use-cases/update-appointment-status.use-case.js";
 import {
   appointmentIdParamSchema,
@@ -16,6 +17,7 @@ import {
   listOwnAppointmentsQuerySchema,
   ownerAvailabilityQuerySchema,
   rescheduleAppointmentBodySchema,
+  revertCompletedAppointmentBodySchema,
   updateAppointmentStatusBodySchema,
 } from "../schemas/appointments-http.schemas.js";
 
@@ -26,6 +28,7 @@ export class AppointmentsController {
     private readonly listAppointmentsUseCase: ListAppointmentsUseCase,
     private readonly updateAppointmentStatusUseCase: UpdateAppointmentStatusUseCase,
     private readonly rescheduleAppointmentUseCase: RescheduleAppointmentUseCase,
+    private readonly revertCompletedAppointmentUseCase: RevertCompletedAppointmentUseCase,
   ) {}
 
   async getPublicAvailability(request: FastifyRequest, reply: FastifyReply) {
@@ -173,5 +176,39 @@ export class AppointmentsController {
     });
 
     return reply.status(200).send(updated);
+  }
+
+  async revertCompletion(request: FastifyRequest, reply: FastifyReply) {
+    const actor = request.actor;
+    if (!actor) {
+      return reply.status(401).send({ message: "Authentication required." });
+    }
+
+    const { appointmentId } = appointmentIdParamSchema.parse(request.params);
+    const body = revertCompletedAppointmentBodySchema.parse(request.body);
+
+    const result = await this.revertCompletedAppointmentUseCase.execute({
+      actor,
+      appointmentId,
+      reason: body.reason,
+      ownerPassword: body.ownerPassword,
+    });
+
+    return reply.status(200).send(result);
+  }
+
+  async listAuditLogs(request: FastifyRequest, reply: FastifyReply) {
+    const actor = request.actor;
+    if (!actor) {
+      return reply.status(401).send({ message: "Authentication required." });
+    }
+
+    const { appointmentId } = appointmentIdParamSchema.parse(request.params);
+    const logs = await this.listAppointmentsUseCase.listAuditLogs(
+      actor,
+      appointmentId,
+    );
+
+    return reply.status(200).send(logs);
   }
 }

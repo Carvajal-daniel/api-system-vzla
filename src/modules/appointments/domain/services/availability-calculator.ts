@@ -16,6 +16,14 @@ export function companySlotStep(company: ActiveCompanyContext, publicBooking = f
   return (publicBooking ? company.bookingInterval : 0) || company.agendaInterval || DEFAULT_SLOT_STEP_MINUTES;
 }
 
+export function isWithinPublicBookingWindow(company: ActiveCompanyContext, now: Date, date: string) {
+  if (company.maxAdvanceBookingDays == null) return true;
+  const { year, month, day } = getLocalDateTimeParts(now, company.timezone);
+  const target = parseLocalDateString(date);
+  return (Date.UTC(target.year, target.month - 1, target.day) - Date.UTC(year, month - 1, day)) / 86_400_000
+    <= company.maxAdvanceBookingDays;
+}
+
 export interface DailyWorkScheduleData {
   dayOfWeek: number;
   isWorkingDay: boolean;
@@ -25,13 +33,17 @@ export interface DailyWorkScheduleData {
   breakEnd: string | null;
 }
 
-type CompanyHours = { openTime: string; closeTime: string } | null | false;
+type CompanyHours = { openTime: string; closeTime: string } |
+  NonNullable<NonNullable<ActiveCompanyContext["operatingSchedule"]>[number]["shifts"]> | null | false;
 
 export function getCompanyHours(company: ActiveCompanyContext, dayOfWeek: number): CompanyHours {
   if (Array.isArray(company.operatingSchedule)) {
     const entry = company.operatingSchedule.find((day) => day.dayOfWeek === dayOfWeek);
-    if (entry) return entry.isOpen && entry.openTime && entry.closeTime
-      ? { openTime: entry.openTime, closeTime: entry.closeTime } : false;
+    if (entry) {
+      if (!entry.isOpen) return false;
+      if (entry.shifts) return entry.shifts.length ? entry.shifts : false;
+      return entry.openTime && entry.closeTime ? [{ start: entry.openTime, end: entry.closeTime }] : false;
+    }
   }
   if (company.operatingDays && !company.operatingDays.split(",").some((day) => day.trim() === String(dayOfWeek))) return false;
   return null;
@@ -70,12 +82,20 @@ function minutes(time: string) {
 }
 
 function workingBounds(schedule: DailyWorkScheduleData | null, hours: CompanyHours = null) {
-  if (!schedule?.isWorkingDay || !schedule.startTime || !schedule.endTime || hours === false) return null;
-  const start = Math.max(minutes(schedule.startTime), hours ? minutes(hours.openTime) : 0);
-  const end = Math.min(minutes(schedule.endTime), hours ? minutes(hours.closeTime) : 1440);
-  if (start >= end) return null;
-  return { start, end, pause: schedule.breakStart && schedule.breakEnd
-    ? { start: minutes(schedule.breakStart), end: minutes(schedule.breakEnd) } : null };
+  if (!schedule?.isWorkingDay || !schedule.startTime || !schedule.endTime || hours === false) return [];
+  const opens = minutes(schedule.startTime);
+  const closes = minutes(schedule.endTime);
+  const shifts = Array.isArray(hours) ? hours : hours ? [{ start: hours.openTime, end: hours.closeTime }] : null;
+  const ranges = shifts?.map(({ start, end }) => ({
+    start: Math.max(opens, minutes(start)),
+    end: Math.min(closes, minutes(end)),
+  })) ?? [{ start: opens, end: closes }];
+  return ranges.filter(({ start, end }) => start < end);
+}
+
+function collaboratorPause(schedule: DailyWorkScheduleData | null, instant: (minute: number) => Date) {
+  return schedule?.breakStart && schedule.breakEnd
+    ? TimeRange.create(instant(minutes(schedule.breakStart)), instant(minutes(schedule.breakEnd))) : null;
 }
 
 export class AvailabilityCalculator {
@@ -83,24 +103,26 @@ export class AvailabilityCalculator {
     const timezone = assertValidIanaTimeZone(input.timezone);
     const { year, month, day } = parseLocalDateString(input.date);
     const bounds = workingBounds(input.workSchedule, input.companyOperatingHours);
-    if (!bounds) return [];
+    if (!bounds.length) return [];
 
     const instant = (minute: number) => localDateTimeToUtc(year, month, day, Math.floor(minute / 60), minute % 60, timezone);
-    const end = instant(bounds.end);
-    const pause = bounds.pause ? TimeRange.create(instant(bounds.pause.start), instant(bounds.pause.end)) : null;
+    const pause = collaboratorPause(input.workSchedule, instant);
     const step = input.step ?? DEFAULT_SLOT_STEP_MINUTES;
     const unavailable = [...input.blocks, ...(input.activeAppointments ?? [])];
     const slots: CalculatedAvailabilitySlot[] = [];
 
-    for (let minute = Math.ceil(bounds.start / step) * step; minute < bounds.end; minute += step) {
-      const startsAt = instant(minute);
-      const local = getLocalDateTimeParts(startsAt, timezone);
-      if (local.dateString !== input.date || local.minutesFromMidnight !== minute || startsAt <= input.now) continue;
-      const endsAt = new Date(startsAt.getTime() + input.serviceDurationMinutes * 60_000);
-      if (endsAt > end) continue;
-      const candidate = TimeRange.create(startsAt, endsAt);
-      if (pause?.overlaps(candidate) || unavailable.some((busy) => busy.overlaps(candidate))) continue;
-      slots.push({ startsAt, endsAt, collaboratorId: input.collaborator.id, collaboratorName: input.collaborator.name });
+    for (const { start, end: endMinute } of bounds) {
+      const end = instant(endMinute);
+      for (let minute = Math.ceil(start / step) * step; minute < endMinute; minute += step) {
+        const startsAt = instant(minute);
+        const local = getLocalDateTimeParts(startsAt, timezone);
+        if (local.dateString !== input.date || local.minutesFromMidnight !== minute || startsAt <= input.now) continue;
+        const endsAt = new Date(startsAt.getTime() + input.serviceDurationMinutes * 60_000);
+        if (endsAt > end) continue;
+        const candidate = TimeRange.create(startsAt, endsAt);
+        if (pause?.overlaps(candidate) || unavailable.some((busy) => busy.overlaps(candidate))) continue;
+        slots.push({ startsAt, endsAt, collaboratorId: input.collaborator.id, collaboratorName: input.collaborator.name });
+      }
     }
     return slots;
   }
@@ -120,9 +142,11 @@ export class AvailabilityCalculator {
     }
     const bounds = workingBounds(input.workSchedule, input.companyOperatingHours);
     const instant = (minute: number) => localDateTimeToUtc(start.year, start.month, start.day, Math.floor(minute / 60), minute % 60, timezone);
-    if (!bounds || start.dateString !== end.dateString || input.workSchedule?.dayOfWeek !== start.dayOfWeek ||
-        startsAt < instant(bounds.start) || endsAt > instant(bounds.end)) throw new AppointmentOutsideWorkScheduleError();
-    if (bounds.pause && candidate.overlaps(TimeRange.create(instant(bounds.pause.start), instant(bounds.pause.end)))) {
+    if (start.dateString !== end.dateString || input.workSchedule?.dayOfWeek !== start.dayOfWeek ||
+        !bounds.some((range) => startsAt >= instant(range.start) && endsAt <= instant(range.end))) {
+      throw new AppointmentOutsideWorkScheduleError();
+    }
+    if (collaboratorPause(input.workSchedule, instant)?.overlaps(candidate)) {
       throw new AppointmentDuringBreakError();
     }
     if (input.blocks.some((block) => block.overlaps(candidate))) throw new AppointmentBlockedError();

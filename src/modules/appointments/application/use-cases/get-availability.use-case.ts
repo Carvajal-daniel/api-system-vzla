@@ -8,7 +8,7 @@ import {
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../domain/repositories/schedule-blocks.repository.js";
 import type { EnabledCollaboratorForServiceContext, SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
-import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
+import { AvailabilityCalculator, companySlotStep, getCompanyHours, isWithinPublicBookingWindow } from "../../domain/services/availability-calculator.js";
 import { assertValidIanaTimeZone, getLocalDayUtcBounds, parseLocalDateString } from "../../domain/services/timezone-utils.js";
 import type { GetAvailabilityInputDTO, GetAvailabilityOutputDTO } from "../dtos/availability.dtos.js";
 
@@ -41,16 +41,18 @@ export class GetAvailabilityUseCase {
     // Keep accepting the legacy timezone parameter without shifting the company’s booking grid.
     if (input.timezone) assertValidIanaTimeZone(input.timezone);
     const timezone = assertValidIanaTimeZone(company.timezone);
+    const publicBooking = input.actorSource === "PUBLIC";
+    const requestedAt = input.now ?? new Date();
     const days = dates.map((date) => {
       const bounds = getLocalDayUtcBounds(date, timezone);
-      return { date, ...bounds, hours: getCompanyHours(company, bounds.dayOfWeek) };
+      const outsideWindow = publicBooking && !isWithinPublicBookingWindow(company, requestedAt, date);
+      return { date, ...bounds, hours: outsideWindow ? false as const : getCompanyHours(company, bounds.dayOfWeek) };
     });
-    const publicBooking = input.actorSource === "PUBLIC";
     const step = companySlotStep(company, publicBooking);
     const empty = (date: string): GetAvailabilityOutputDTO => ({
       companyId, serviceId, date, timezone, slotStepMinutes: step, serviceDurationMinutes: 0, slots: [],
     });
-    const now = new Date((input.now ?? new Date()).getTime() + (publicBooking ? company.leadTime ?? 0 : 0) * 60_000);
+    const now = new Date(requestedAt.getTime() + (publicBooking ? company.leadTime ?? 0 : 0) * 60_000);
     const open = days.filter((day) => day.hours !== false && day.endUtc > now);
     if (days.every((day) => day.hours === false)) return dates.map(empty);
 

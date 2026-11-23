@@ -1,3 +1,4 @@
+import type { CompanyOperatingDaySchedule } from "../../../appointments/domain/repositories/scheduling-context-lookup.repository.js";
 import type { CollaboratorServiceEntity } from "../../domain/entities/collaborator-service.entity.js";
 import type { ServiceEntity } from "../../domain/entities/service.entity.js";
 
@@ -105,12 +106,7 @@ export interface PublicCompanyInfoDTO {
   currency?: "BRL" | "USD" | "VES";
   avatarUrl?: string | null;
   operatingDays?: string | null;
-  operatingSchedule?: Array<{
-    dayOfWeek: number;
-    isOpen: boolean;
-    openTime: string | null;
-    closeTime: string | null;
-  }> | null;
+  operatingSchedule?: CompanyOperatingDaySchedule[] | null;
 }
 
 export interface PublicCompanyCatalogOutputDTO {

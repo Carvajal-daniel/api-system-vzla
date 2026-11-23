@@ -3,7 +3,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getGoogleMapsApiKey } from "../../../../shared/config/env.js";
 import { db } from "../../../../shared/database/database.js";
-import { authenticate, authorizeRoles } from "../../../../shared/http/auth/authenticate.js";
 import { CompanySettingsTable } from "../database/schema/company-settings-schema.js";
 import { CompanyTable } from "../database/schema/companies-schema.js";
 
@@ -23,7 +22,6 @@ const placeSchema = z.object({
   })).optional(),
 });
 const summaryFields = ["id", "displayName", "formattedAddress", "location", "rating", "userRatingCount", "googleMapsUri"];
-const searchFields = ["id", "displayName", "formattedAddress", "googleMapsUri"];
 
 function publicPlace(place: z.infer<typeof placeSchema>) {
   return {
@@ -37,11 +35,9 @@ function publicPlace(place: z.infer<typeof placeSchema>) {
   };
 }
 
-async function requestGoogle(key: string, path: string, fields: string[], body?: { textQuery: string; pageSize: number }) {
+async function requestGoogle(key: string, path: string, fields: string[]) {
   return fetch(`https://places.googleapis.com/v1/${path}`, {
-    method: body ? "POST" : "GET",
-    headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": fields.join(","), ...(body ? { "Content-Type": "application/json" } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": fields.join(",") },
     signal: AbortSignal.timeout(6_000),
   }).catch(() => null);
 }
@@ -57,24 +53,6 @@ async function details(key: string, id: string, summary: boolean) {
 const missingKey = { status: "not_configured", message: "Configure GOOGLE_MAPS_API_KEY no .env do backend." } as const;
 
 export async function googlePlaceRoutes(app: FastifyInstance) {
-  app.get("/companies/:companyId/google-place/search", { preHandler: [authenticate, authorizeRoles("OWNER")] }, async (request, reply) => {
-    const { companyId } = params.parse(request.params);
-    if (request.actor!.companyId !== companyId) return reply.code(403).send({ message: "Acesso restrito à própria empresa." });
-    const { query } = z.object({ query: z.string().trim().min(3).max(255) }).parse(request.query);
-    reply.header("Cache-Control", "no-store");
-    const key = getGoogleMapsApiKey();
-    if (!key) return missingKey;
-    const candidate = query.startsWith("places/") ? query.slice(7) : /^(?:ChIJ|GhIJ)[A-Za-z0-9_-]+$/.test(query) ? query : null;
-    if (candidate) {
-      const result = await details(key, placeId.parse(candidate), false);
-      return result.status === "ready" ? { status: "ready", places: [result.place] } : result;
-    }
-    const response = await requestGoogle(key, "places:searchText", searchFields.map((field) => `places.${field}`), { textQuery: query, pageSize: 7 });
-    if (!response?.ok) return { status: "unavailable" };
-    const result = z.object({ places: z.array(placeSchema).default([]) }).safeParse(await response.json().catch(() => null));
-    return result.success ? { status: "ready", places: result.data.places.map(publicPlace) } : { status: "unavailable" };
-  });
-
   app.get("/companies/:companyId/google-place", async (request, reply) => {
     const { companyId } = params.parse(request.params);
     const { summary } = z.object({ summary: z.enum(["true", "false"]).optional() }).parse(request.query);

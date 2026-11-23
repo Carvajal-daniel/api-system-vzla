@@ -6,6 +6,7 @@ import fastifyStatic from "@fastify/static";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
+import { clientRecoveryRoutes } from "../../modules/clients/infra/http/client-recovery.routes.js";
 import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import { googlePlaceRoutes } from "../../modules/Company/infra/http/google-place.routes.js";
@@ -13,6 +14,7 @@ import { companySettingsRoutes } from "../../modules/Company/infra/http/company-
 import { ComapnyRoutes } from "../../modules/Company/infra/http/routers/company-routes.js";
 import { collectionRoutes } from "../../modules/finance/infra/http/routes/collection.routes.js";
 import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.routes.js";
+import { orderRoutes } from "../../modules/finance/infra/http/routes/order.routes.js";
 import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.routes.js";
 import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
@@ -82,7 +84,9 @@ app.register(workSchedulesRoutes);
 app.register(appointmentsRoutes);
 app.register(financeRoutes);
 app.register(collectionRoutes);
+app.register(orderRoutes);
 app.register(outflowRoutes);
 app.register(inventoryRoutes);
+app.register(clientRecoveryRoutes);
 
 export { app };

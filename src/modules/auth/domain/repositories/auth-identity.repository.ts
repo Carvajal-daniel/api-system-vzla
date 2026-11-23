@@ -1,3 +1,4 @@
+import type { CompanyOperatingDaySchedule } from "../../../appointments/domain/repositories/scheduling-context-lookup.repository.js";
 export interface AuthOwnerRecord {
   readonly role: "OWNER";
   readonly id: string;
@@ -12,12 +13,7 @@ export interface AuthOwnerRecord {
   readonly isActive: boolean;
   readonly avatarUrl?: string | null;
   readonly operatingDays?: string | null;
-  readonly operatingSchedule?: Array<{
-    dayOfWeek: number;
-    isOpen: boolean;
-    openTime: string | null;
-    closeTime: string | null;
-  }> | null;
+  readonly operatingSchedule?: CompanyOperatingDaySchedule[] | null;
 }
 
 export interface AuthCollaboratorRecord {
@@ -73,12 +69,7 @@ export interface AuthIdentityRepository {
       phone?: string;
       avatarUrl?: string | null;
       operatingDays?: string | null;
-      operatingSchedule?: Array<{
-        dayOfWeek: number;
-        isOpen: boolean;
-        openTime: string | null;
-        closeTime: string | null;
-      }> | null;
+      operatingSchedule?: CompanyOperatingDaySchedule[] | null;
     },
   ): Promise<void>;
   updateCollaboratorProfile?(

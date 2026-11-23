@@ -23,6 +23,30 @@ export interface PublicBookingDetails {
   cancellationDigest: string;
 }
 
+export interface AppointmentAuditLogRecord {
+  id: string;
+  companyId: string;
+  appointmentId: string;
+  action: string;
+  previousStatus: AppointmentStatusValue;
+  newStatus: AppointmentStatusValue;
+  reason: string;
+  authorizedById: string;
+  authorizedByName: string;
+  authorizedByRole: string;
+  createdAt: Date;
+}
+
+export interface CreateAppointmentAuditLogInput {
+  action: string;
+  previousStatus: AppointmentStatusValue;
+  newStatus: AppointmentStatusValue;
+  reason: string;
+  authorizedById: string;
+  authorizedByName: string;
+  authorizedByRole: string;
+}
+
 export interface AppointmentsRepository {
   /**
    * Cria o agendamento de forma atômica sob lock exclusivo por (companyId, collaboratorId),
@@ -40,6 +64,21 @@ export interface AppointmentsRepository {
     appointment: Appointment,
     expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
   ): Promise<void>;
+
+  /**
+   * Reverte um agendamento COMPLETED para CONFIRMED de forma atômica, bloqueando se houver
+   * pagamentos líquidos ativos e registrando a trilha de auditoria na mesma transação.
+   */
+  revertCompletionWithAudit(
+    appointment: Appointment,
+    expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+    audit: CreateAppointmentAuditLogInput,
+  ): Promise<AppointmentAuditLogRecord>;
+
+  listAuditLogs(
+    companyId: string,
+    appointmentId: string,
+  ): Promise<AppointmentAuditLogRecord[]>;
 
   findById(companyId: string, appointmentId: string): Promise<Appointment | null>;
 

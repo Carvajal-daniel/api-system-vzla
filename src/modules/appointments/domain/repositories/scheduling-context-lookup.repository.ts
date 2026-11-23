@@ -5,6 +5,7 @@ export interface CompanyOperatingDaySchedule {
   isOpen: boolean;
   openTime: string | null;
   closeTime: string | null;
+  shifts?: { start: string; end: string }[];
 }
 
 export interface ActiveCompanyContext {
@@ -16,6 +17,7 @@ export interface ActiveCompanyContext {
   agendaInterval?: number;
   bookingInterval?: number;
   leadTime?: number;
+  maxAdvanceBookingDays?: number | null;
   clientFields?: Record<string, "required" | "optional" | "hidden">;
   operatingSchedule?: CompanyOperatingDaySchedule[] | null | undefined;
 }

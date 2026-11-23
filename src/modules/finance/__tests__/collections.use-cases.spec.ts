@@ -128,4 +128,23 @@ describe("Appointment collections", () => {
     await expect(record.execute(owner, request)).rejects.toThrow(collectionErrors.date);
     await expect(record.execute(employee, { ...request, effectiveOn })).rejects.toThrow(collectionErrors.permission);
   });
+
+  it("blocks duplicate collection on an already fully paid appointment with 409 CONFLICT", async () => {
+    const { record } = fixture();
+    await record.execute(owner, {
+      appointmentId,
+      effectiveOn,
+      requestKey: "full-payment",
+      payments: [{ method: "PIX", amountInCents: 10000 }],
+    });
+
+    await expect(
+      record.execute(owner, {
+        appointmentId,
+        effectiveOn,
+        requestKey: "duplicate-payment",
+        payments: [{ method: "CASH", amountInCents: 1000 }],
+      }),
+    ).rejects.toThrow(collectionErrors.alreadyPaid);
+  });
 });

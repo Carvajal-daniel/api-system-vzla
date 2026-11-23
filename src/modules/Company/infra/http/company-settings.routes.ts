@@ -1,41 +1,53 @@
 import { createHash, randomBytes } from "node:crypto";
+import bcrypt from "bcrypt";
 import { and, avg, between, count, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { analyzeSatisfaction } from "../../domain/satisfaction-analysis.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { db } from "../../../../shared/database/database.js";
 import { authenticate, authorizeRoles } from "../../../../shared/http/auth/authenticate.js";
+import { timezoneSchema } from "../../../../shared/utils/validation-schemas.js";
+import { updateCompanyCurrency } from "../database/repositories/update-company-currency.js";
 import { CompanyTable } from "../database/schema/companies-schema.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
 import { CollaboratorReviewTable } from "../../../Collaborators/infra/database/schema/collaborator-reviews-schema.js";
 import { appearanceSchema, ClientProfileFieldsTable, CompanySettingsTable, defaults, publicClientFields, selectedClientFields, settingsPatchSchema, settingsSchema, SurveyTable, type Settings } from "../database/schema/company-settings-schema.js";
 
-async function readCompanySettings(companyId: string): Promise<Settings> {
+async function readSettingsSnapshot(companyId: string) {
   const [row] = await db.select({ preferences: CompanySettingsTable.preferences }).from(CompanySettingsTable)
     .where(eq(CompanySettingsTable.companyId, companyId));
-  return settingsSchema.parse({ ...defaults, ...row?.preferences, clientFields: { ...defaults.clientFields, ...row?.preferences.clientFields } });
+  const preferences = row?.preferences;
+  return {
+    settings: settingsSchema.parse({ ...defaults, ...preferences, clientFields: { ...defaults.clientFields, ...preferences?.clientFields } }),
+    countryCodeConfigured: preferences?.countryCode !== undefined,
+  };
+}
+
+async function readCompanySettings(companyId: string): Promise<Settings> {
+  return (await readSettingsSnapshot(companyId)).settings;
 }
 
 async function snapshot(companyId: string) {
-  const [settings, [rating]] = await Promise.all([
-    readCompanySettings(companyId),
+  const [{ settings, countryCodeConfigured }, [rating]] = await Promise.all([
+    readSettingsSnapshot(companyId),
     db.select({ count: count(CollaboratorReviewTable.rating), average: avg(CollaboratorReviewTable.rating) })
       .from(CollaboratorReviewTable).where(and(eq(CollaboratorReviewTable.companyId, companyId), between(CollaboratorReviewTable.rating, 1, 5))),
   ]);
-  return { ...settings, rating: rating?.count ? { count: rating.count, average: Number(rating.average) } : null };
+  return { ...settings, countryCodeConfigured, rating: rating?.count ? { count: rating.count, average: Number(rating.average) } : null };
 }
 
 const owner = { preHandler: [authenticate, authorizeRoles("OWNER")] };
 const requestReview = z.object({ stars: z.number().int().min(1).max(5), comment: z.string().trim().max(1000).optional() });
 
-async function surveyReviews(companyId: string, limit: number) {
+async function surveyReviews(companyId: string, limit: number, stars?: number) {
   return db.select({
     id: CollaboratorReviewTable.id, appointmentId: CollaboratorReviewTable.appointmentId,
     stars: CollaboratorReviewTable.rating, comment: CollaboratorReviewTable.comment,
     submittedAt: CollaboratorReviewTable.createdAt, service: CollaboratorReviewTable.serviceName,
   }).from(CollaboratorReviewTable)
-    .where(and(eq(CollaboratorReviewTable.companyId, companyId), between(CollaboratorReviewTable.rating, 1, 5)))
-    .orderBy(desc(CollaboratorReviewTable.createdAt)).limit(limit);
+    .where(and(eq(CollaboratorReviewTable.companyId, companyId),
+      stars === undefined ? between(CollaboratorReviewTable.rating, 1, 5) : eq(CollaboratorReviewTable.rating, stars)))
+    .orderBy(desc(CollaboratorReviewTable.createdAt), desc(CollaboratorReviewTable.id)).limit(limit);
 }
 
 export async function companySettingsRoutes(app: FastifyInstance) {
@@ -44,10 +56,10 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const [company] = await db.select({ id: CompanyTable.id }).from(CompanyTable)
       .where(and(eq(CompanyTable.id, companyId), eq(CompanyTable.isActive, true)));
     if (!company) return reply.code(404).send({ message: "Empresa não encontrada." });
-    const { reminders: _reminders, onlinePayment: _payment, packageSales: _packages, customClientFields, clientFields, ...publicSettings } = await snapshot(companyId);
+    const { reminders: _reminders, onlinePayment: _payment, packageSales: _packages, documents: _documents, countryCodeConfigured: _countryCodeConfigured, customClientFields, clientFields, ...publicSettings } = await snapshot(companyId);
     const active = selectedClientFields({ clientFields, customClientFields, clientFieldSlots: publicSettings.clientFieldSlots });
     const ids = new Set(active.map(({ id }) => id));
-    return { ...publicSettings, clientFields: { ...publicClientFields.parse(clientFields), ...Object.fromEntries(active.map(({ id, mode }) => [id, mode])) },
+    return { ...publicSettings, cancelLeadTime: publicSettings.cancelLeadTime ?? publicSettings.leadTime, clientFields: { ...publicClientFields.parse(clientFields), ...Object.fromEntries(active.map(({ id, mode }) => [id, mode])) },
       customClientFields: customClientFields.filter(({ id }) => ids.has(id)) };
 
   });
@@ -61,8 +73,9 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const body = settingsPatchSchema.extend({
       appearance: appearanceSchema.partial().optional(), palette: appearanceSchema.shape.palette.optional(),
       mode: appearanceSchema.shape.mode.optional(), theme: appearanceSchema.shape.mode.optional(),
+      region: z.object({ timezone: timezoneSchema, currency: z.enum(["BRL", "USD", "VES"]) }).optional(),
     }).parse(request.body);
-    const { appearance: nested, palette, mode, theme, ...preferences } = body;
+    const { appearance: nested, palette, mode, theme, region, ...preferences } = body;
     const appearance = {
       ...nested,
       ...(palette ? { palette } : {}),
@@ -73,7 +86,7 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const combined = sql`${CompanySettingsTable.preferences} || excluded.preferences`;
     const mergedPreferences = preferences.clientFields ? sql`jsonb_set(${combined}, '{clientFields}',
       coalesce(${CompanySettingsTable.preferences}->'clientFields', '{}'::jsonb) || (excluded.preferences->'clientFields'))` : combined;
-    await db.insert(CompanySettingsTable).values({ companyId, preferences, ...(hasAppearance ? { appearance: initialAppearance } : {}) })
+    const writePreferences = (query: Pick<typeof db, "insert">) => query.insert(CompanySettingsTable).values({ companyId, preferences, ...(hasAppearance ? { appearance: initialAppearance } : {}) })
       .onConflictDoUpdate({
         target: CompanySettingsTable.companyId,
         set: {
@@ -81,6 +94,16 @@ export async function companySettingsRoutes(app: FastifyInstance) {
           ...(hasAppearance ? { appearance: sql`coalesce(${CompanySettingsTable.appearance}, '{}'::jsonb) || ${JSON.stringify(appearance)}::jsonb` } : {}),
         },
       });
+    if (region) {
+      await db.transaction(async (tx) => {
+        await updateCompanyCurrency(tx, companyId, region.currency);
+        await tx.update(CompanyTable).set({ timezone: region.timezone, updatedAt: new Date() })
+          .where(eq(CompanyTable.id, companyId));
+        await writePreferences(tx);
+      });
+    } else {
+      await writePreferences(db);
+    }
     return snapshot(companyId);
   }
   app.patch("/companies/me/settings", owner, patchSettings);
@@ -142,17 +165,36 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const [appointment] = await db.select({ status: AppointmentTable.status }).from(AppointmentTable).where(match);
     if (!appointment) return reply.code(404).send({ message: "Reserva não encontrada." });
     if (appointment.status === "CANCELED") return reply.code(204).send();
-    const { leadTime } = await readCompanySettings(companyId);
+    const preferences = await readCompanySettings(companyId);
+    const effectiveCancelLeadTime = preferences.cancelLeadTime ?? preferences.leadTime ?? 0;
+    async function rejection(status: 403 | 409, code: string, message: string) {
+      const [company] = await db.select({ phone: CompanyTable.phone, timezone: CompanyTable.timezone })
+        .from(CompanyTable).where(eq(CompanyTable.id, companyId));
+      return reply.code(status).send({
+        code, message, cancelLeadTime: effectiveCancelLeadTime,
+        whatsapp: preferences.reminders?.servicePhone || company?.phone,
+        timezone: company?.timezone,
+      });
+    }
+    if (preferences.allowClientCancel === false) {
+      return rejection(403, "PUBLIC_CANCEL_DISABLED", "O cancelamento por este link está desativado.");
+    }
     const [updated] = await db.update(AppointmentTable)
       .set({ status: "CANCELED", cancellationReason: "Cancelado pelo cliente", updatedAt: new Date() })
       .where(and(match, inArray(AppointmentTable.status, ["PENDING", "CONFIRMED"]),
-        gt(AppointmentTable.startsAt, new Date(Date.now() + leadTime * 60_000))))
+        gt(AppointmentTable.startsAt, new Date(Date.now() + effectiveCancelLeadTime * 60_000))))
       .returning({ id: AppointmentTable.id });
-    if (!updated) return reply.code(409).send({ message: "Esta reserva está fora do prazo de cancelamento." });
+    if (!updated) return rejection(409, "PUBLIC_CANCEL_CONFLICT", "Esta reserva não pode mais ser cancelada por este link.");
     return reply.code(204).send();
   });
 
-  app.get("/companies/me/reviews", owner, (request) => surveyReviews(request.actor!.companyId, 100));
+  app.get("/companies/me/reviews", owner, (request) => {
+    const { stars, limit } = z.object({
+      stars: z.coerce.number().int().min(1).max(5).optional(),
+      limit: z.coerce.number().int().positive().default(100),
+    }).parse(request.query);
+    return surveyReviews(request.actor!.companyId, limit, stars);
+  });
 
   app.post("/companies/me/reviews/:appointmentId", owner, async (request, reply) => {
     const companyId = request.actor!.companyId;
@@ -211,5 +253,84 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const [reviews, settings] = await Promise.all([surveyReviews(companyId, 100), snapshot(companyId)]);
     if (!settings.rating) return reply.code(409).send({ message: "Ainda não há avaliações para analisar." });
     return analyzeSatisfaction(settings.rating, reviews, locale);
+  });
+
+  // Consulta se o PIN de autorização do dono já está configurado na empresa (sem nunca expor o hash)
+  app.get("/companies/me/security/pin", {
+    ...owner,
+    schema: {
+      tags: ["Company Security (Owner)"],
+      summary: "Check whether the company owner authorization PIN is configured",
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: "object",
+          properties: { hasPin: { type: "boolean" } },
+        },
+      },
+    },
+  }, async (request) => {
+    const companyId = request.actor!.companyId;
+    const [company] = await db
+      .select({ ownerPinHash: CompanyTable.ownerPinHash })
+      .from(CompanyTable)
+      .where(eq(CompanyTable.id, companyId));
+    return { hasPin: Boolean(company?.ownerPinHash) };
+  });
+
+  // Configura ou altera o PIN numérico (4 a 6 dígitos) do dono mediante validação da senha atual
+  app.patch("/companies/me/security/pin", {
+    ...owner,
+    schema: {
+      tags: ["Company Security (Owner)"],
+      summary: "Set or update the company owner authorization PIN (4 to 6 numeric digits)",
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: "object",
+        required: ["currentPassword", "pin"],
+        properties: {
+          currentPassword: { type: "string", minLength: 1 },
+          pin: { type: "string", pattern: "^[0-9]{4,6}$" },
+        },
+      },
+      response: {
+        200: {
+          type: "object",
+          properties: { hasPin: { type: "boolean" } },
+        },
+        401: { type: "object", properties: { message: { type: "string" } } },
+        404: { type: "object", properties: { message: { type: "string" } } },
+      },
+    },
+  }, async (request, reply) => {
+    const companyId = request.actor!.companyId;
+    const { currentPassword, pin } = z
+      .object({
+        currentPassword: z.string().min(1, "OWNER_CURRENT_PASSWORD_REQUIRED"),
+        pin: z.string().regex(/^\d{4,6}$/, "OWNER_PIN_INVALID_FORMAT"),
+      })
+      .parse(request.body);
+
+    const [company] = await db
+      .select({ id: CompanyTable.id, password: CompanyTable.password })
+      .from(CompanyTable)
+      .where(eq(CompanyTable.id, companyId));
+
+    if (!company) {
+      return reply.code(404).send({ message: "COMPANY_NOT_FOUND" });
+    }
+
+    const passwordMatches = await bcrypt.compare(currentPassword, company.password);
+    if (!passwordMatches) {
+      return reply.code(401).send({ message: "INVALID_CURRENT_PASSWORD" });
+    }
+
+    const ownerPinHash = await bcrypt.hash(pin, 10);
+    await db
+      .update(CompanyTable)
+      .set({ ownerPinHash, updatedAt: new Date() })
+      .where(eq(CompanyTable.id, companyId));
+
+    return { hasPin: true };
   });
 }

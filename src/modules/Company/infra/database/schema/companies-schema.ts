@@ -23,6 +23,9 @@ export const CompanyTable = pgTable("companies", {
   
   // Senha (MÃ­nimo de 6 e mÃ¡ximo de 15 caracteres)* -> Salvaremos o Hash
   password: text("password").notNull(),
+
+  // Hash bcrypt do PIN numérico (4-6 dígitos) do dono para autorizar reabertura de comandas fechadas
+  ownerPinHash: text("owner_pin_hash"),
   
   // Status do cadastro / Ativo para login
   isActive: boolean("is_active").default(true).notNull(),

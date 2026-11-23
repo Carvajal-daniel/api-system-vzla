@@ -1,8 +1,10 @@
 import { AppointmentNotFoundError, UnauthorizedSchedulingActionError } from "../../domain/errors/appointment-errors.js";
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import {
+  type AppointmentAuditLogOutputDTO,
   type AppointmentOutputDTO,
   type ListAppointmentsInputDTO,
+  toAppointmentAuditLogOutputDTO,
   toAppointmentOutputDTO,
 } from "../dtos/appointment.dtos.js";
 
@@ -17,6 +19,29 @@ export class ListAppointmentsUseCase {
       throw new AppointmentNotFoundError();
     }
     return toAppointmentOutputDTO(appointment);
+  }
+
+  async listAuditLogs(
+    actor: ListAppointmentsInputDTO["actor"],
+    appointmentId: string,
+  ): Promise<AppointmentAuditLogOutputDTO[]> {
+    const appointment = await this.appointmentsRepository.findById(
+      actor.companyId,
+      appointmentId,
+    );
+    if (
+      !appointment ||
+      (actor.role === "COLLABORATOR" &&
+        appointment.collaboratorId !== actor.collaboratorId)
+    ) {
+      throw new AppointmentNotFoundError();
+    }
+
+    const logs = await this.appointmentsRepository.listAuditLogs(
+      actor.companyId,
+      appointmentId,
+    );
+    return logs.map(toAppointmentAuditLogOutputDTO);
   }
 
   async execute(

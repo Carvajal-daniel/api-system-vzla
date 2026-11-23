@@ -1,13 +1,17 @@
+import crypto from "node:crypto";
 import type { Appointment } from "../../domain/entities/appointment.entity.js";
 import { AppointmentTimeConflictError } from "../../domain/errors/appointment-errors.js";
 import type {
+  AppointmentAuditLogRecord,
   AppointmentsRepository,
+  CreateAppointmentAuditLogInput,
   ListAppointmentsFilter,
 } from "../../domain/repositories/appointments.repository.js";
 import { TimeRange } from "../../domain/value-objects/time-range.vo.js";
 
 export class InMemoryAppointmentsRepository implements AppointmentsRepository {
   public readonly items: Appointment[] = [];
+  public readonly auditLogs: AppointmentAuditLogRecord[] = [];
   // Mutex em memória por `${companyId}:${collaboratorId}` espelhando pg_advisory_xact_lock.
   private readonly locks = new Map<string, Promise<void>>();
 
@@ -105,6 +109,38 @@ export class InMemoryAppointmentsRepository implements AppointmentsRepository {
     if (index !== -1) {
       this.items[index] = appointment;
     }
+  }
+
+  async revertCompletionWithAudit(
+    appointment: Appointment,
+    _expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+    audit: CreateAppointmentAuditLogInput,
+  ): Promise<AppointmentAuditLogRecord> {
+    await this.save(appointment);
+    const record: AppointmentAuditLogRecord = {
+      id: crypto.randomUUID(),
+      companyId: appointment.companyId,
+      appointmentId: appointment.id,
+      action: audit.action,
+      previousStatus: audit.previousStatus,
+      newStatus: audit.newStatus,
+      reason: audit.reason,
+      authorizedById: audit.authorizedById,
+      authorizedByName: audit.authorizedByName,
+      authorizedByRole: audit.authorizedByRole,
+      createdAt: new Date(),
+    };
+    this.auditLogs.unshift(record);
+    return record;
+  }
+
+  async listAuditLogs(
+    companyId: string,
+    appointmentId: string,
+  ): Promise<AppointmentAuditLogRecord[]> {
+    return this.auditLogs.filter(
+      (log) => log.companyId === companyId && log.appointmentId === appointmentId,
+    );
   }
 
   async findById(

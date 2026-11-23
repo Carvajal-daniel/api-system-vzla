@@ -166,3 +166,27 @@ export class UnauthorizedSchedulingActionError extends DomainError {
     super(message, "FORBIDDEN");
   }
 }
+
+export class AppointmentRevertNotAllowedError extends DomainError {
+  constructor(
+    message = "Only completed appointments without active payments can be reverted.",
+  ) {
+    super(message, "CONFLICT");
+  }
+}
+
+export class InvalidOwnerAuthorizationError extends DomainError {
+  constructor(
+    message = "INVALID_OWNER_PASSWORD",
+  ) {
+    super(message, "UNAUTHORIZED");
+  }
+}
+
+export class RevertReasonRequiredError extends DomainError {
+  constructor(
+    message = "A justification reason with at least 5 characters is required.",
+  ) {
+    super(message, "VALIDATION");
+  }
+}

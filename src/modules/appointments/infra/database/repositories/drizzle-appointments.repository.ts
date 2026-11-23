@@ -1,16 +1,28 @@
-import { and, asc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { Appointment } from "../../../domain/entities/appointment.entity.js";
-import { AppointmentChangedError, AppointmentTimeConflictError } from "../../../domain/errors/appointment-errors.js";
+import {
+  AppointmentChangedError,
+  AppointmentRevertNotAllowedError,
+  AppointmentTimeConflictError,
+} from "../../../domain/errors/appointment-errors.js";
 import type {
+  AppointmentAuditLogRecord,
   AppointmentsRepository,
+  CreateAppointmentAuditLogInput,
   ListAppointmentsFilter,
   PublicBookingDetails,
 } from "../../../domain/repositories/appointments.repository.js";
 import type { AppointmentStatusValue } from "../../../domain/value-objects/appointment-status.vo.js";
-import { FinancialDocumentTable } from "../../../../finance/infra/database/schema/collections-schema.js";
+import {
+  FinancialDocumentTable,
+  ReceiptTable,
+} from "../../../../finance/infra/database/schema/collections-schema.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
-import { AppointmentTable } from "../schema/appointments-schema.js";
+import {
+  AppointmentAuditLogTable,
+  AppointmentTable,
+} from "../schema/appointments-schema.js";
 
 const ACTIVE_BOOKING_STATUSES: readonly AppointmentStatusValue[] = [
   "PENDING",
@@ -180,6 +192,130 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
         });
       }
     });
+  }
+
+  async revertCompletionWithAudit(
+    appointment: Appointment,
+    expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+    audit: CreateAppointmentAuditLogInput,
+  ): Promise<AppointmentAuditLogRecord> {
+    return db.transaction(async (tx) => {
+      // Impede reversão se houver recebimentos líquidos ativos para não corromper o caixa ou comissões.
+      const [doc] = await tx
+        .select({ id: FinancialDocumentTable.id })
+        .from(FinancialDocumentTable)
+        .where(
+          and(
+            eq(FinancialDocumentTable.companyId, appointment.companyId),
+            eq(FinancialDocumentTable.appointmentId, appointment.id),
+          ),
+        )
+        .limit(1);
+
+      if (doc) {
+        const receipts = await tx
+          .select({
+            amountInCents: ReceiptTable.amountInCents,
+            reversesReceiptId: ReceiptTable.reversesReceiptId,
+          })
+          .from(ReceiptTable)
+          .where(
+            and(
+              eq(ReceiptTable.companyId, appointment.companyId),
+              eq(ReceiptTable.documentId, doc.id),
+            ),
+          );
+
+        const netCollected = receipts.reduce(
+          (sum, row) => sum + (row.reversesReceiptId ? -row.amountInCents : row.amountInCents),
+          0,
+        );
+        if (netCollected > 0) {
+          throw new AppointmentRevertNotAllowedError("APPOINTMENT_HAS_PAID_RECEIPTS");
+        }
+      }
+
+      const updated = await tx
+        .update(AppointmentTable)
+        .set({
+          status: appointment.status,
+          completedAt: null,
+          updatedAt: appointment.updatedAt,
+        })
+        .where(
+          and(
+            eq(AppointmentTable.companyId, appointment.companyId),
+            eq(AppointmentTable.id, appointment.id),
+            eq(AppointmentTable.status, expected.status),
+            eq(AppointmentTable.startsAt, expected.startsAt),
+            eq(AppointmentTable.collaboratorId, expected.collaboratorId),
+          ),
+        )
+        .returning({ id: AppointmentTable.id });
+
+      if (!updated.length) {
+        throw new AppointmentChangedError();
+      }
+
+      const [inserted] = await tx
+        .insert(AppointmentAuditLogTable)
+        .values({
+          companyId: appointment.companyId,
+          appointmentId: appointment.id,
+          action: audit.action,
+          previousStatus: audit.previousStatus,
+          newStatus: audit.newStatus,
+          reason: audit.reason,
+          authorizedById: audit.authorizedById,
+          authorizedByName: audit.authorizedByName,
+          authorizedByRole: audit.authorizedByRole,
+        })
+        .returning();
+
+      return {
+        id: inserted!.id,
+        companyId: inserted!.companyId,
+        appointmentId: inserted!.appointmentId,
+        action: inserted!.action,
+        previousStatus: inserted!.previousStatus as AppointmentStatusValue,
+        newStatus: inserted!.newStatus as AppointmentStatusValue,
+        reason: inserted!.reason,
+        authorizedById: inserted!.authorizedById,
+        authorizedByName: inserted!.authorizedByName,
+        authorizedByRole: inserted!.authorizedByRole,
+        createdAt: inserted!.createdAt,
+      };
+    });
+  }
+
+  async listAuditLogs(
+    companyId: string,
+    appointmentId: string,
+  ): Promise<AppointmentAuditLogRecord[]> {
+    const rows = await db
+      .select()
+      .from(AppointmentAuditLogTable)
+      .where(
+        and(
+          eq(AppointmentAuditLogTable.companyId, companyId),
+          eq(AppointmentAuditLogTable.appointmentId, appointmentId),
+        ),
+      )
+      .orderBy(desc(AppointmentAuditLogTable.createdAt));
+
+    return rows.map((row) => ({
+      id: row.id,
+      companyId: row.companyId,
+      appointmentId: row.appointmentId,
+      action: row.action,
+      previousStatus: row.previousStatus as AppointmentStatusValue,
+      newStatus: row.newStatus as AppointmentStatusValue,
+      reason: row.reason,
+      authorizedById: row.authorizedById,
+      authorizedByName: row.authorizedByName,
+      authorizedByRole: row.authorizedByRole,
+      createdAt: row.createdAt,
+    }));
   }
 
   async findById(

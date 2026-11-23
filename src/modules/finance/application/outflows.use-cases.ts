@@ -26,6 +26,43 @@ export interface CommissionReport {
   settlements: (Settlement & { collaboratorName: string })[];
 }
 
+export interface CommissionDetailItem {
+  id: string;
+  source: "APPOINTMENT" | "ORDER";
+  itemType: "SERVICE" | "PRODUCT" | "TIP";
+  date: string;
+  clientName: string;
+  description: string;
+  baseAmountCents: number;
+  commissionPercentage: number;
+  commissionCents: number;
+}
+
+export interface CommissionSettledBatch {
+  id: string;
+  paidAt: string;
+  periodStart: string;
+  periodEnd: string;
+  amountCents: number;
+  paymentMethod: string | null;
+  notes: string | null;
+  items: CommissionDetailItem[];
+}
+
+export interface CollaboratorCommissionDetail {
+  period: CommissionFilter;
+  collaborator: { id: string; name: string };
+  summary: {
+    grossPendingCents: number;
+    deductionsCents: number;
+    alreadyPaidCents: number;
+    netPayableCents: number;
+  };
+  pendingItems: CommissionDetailItem[];
+  deductions: CommissionDeduction[];
+  settledHistory: CommissionSettledBatch[];
+}
+
 export interface OutflowsRepository {
   listExpenses(companyId: string, filters: ExpenseFilters): Promise<Expense[]>;
   createExpense(companyId: string, input: ExpenseInput): Promise<Expense>;
@@ -34,6 +71,7 @@ export interface OutflowsRepository {
   payExpense(companyId: string, id: string, input: PaidInput): Promise<Expense>;
   deleteExpense(companyId: string, id: string): Promise<void>;
   commissions(companyId: string, filters: OutflowFilters): Promise<CommissionReport>;
+  collaboratorCommissionDetail(companyId: string, collaboratorId: string, filters: OutflowFilters): Promise<CollaboratorCommissionDetail>;
   listCommissionDeductions(companyId: string, filters: OutflowFilters): Promise<CommissionDeduction[]>;
   createCommissionDeduction(companyId: string, input: CommissionDeductionInput): Promise<CommissionDeduction>;
   deleteCommissionDeduction(companyId: string, id: string): Promise<void>;
@@ -97,6 +135,12 @@ export class ManageCommissionSettlements {
     owner(actor);
     validatePeriod(filters.from, filters.to);
     return this.repository.commissions(actor.companyId, filters);
+  }
+
+  detail(actor: ActorContext, collaboratorId: string, filters: OutflowFilters) {
+    owner(actor);
+    validatePeriod(filters.from, filters.to);
+    return this.repository.collaboratorCommissionDetail(actor.companyId, collaboratorId, filters);
   }
 
   listDeductions(actor: ActorContext, filters: OutflowFilters) {

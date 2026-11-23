@@ -8,6 +8,7 @@ import {
   makeAppointmentsControllers,
 } from "../factories/make-appointments-controllers.js";
 import {
+  appointmentAuditLogOpenApiSchema,
   appointmentOpenApiSchema,
   availabilityResponseOpenApiSchema,
   createScheduleBlockResponseOpenApiSchema,
@@ -426,5 +427,70 @@ export async function appointmentsRoutes(
       },
     },
     appointmentsController.reschedule.bind(appointmentsController),
+  );
+
+  app.post(
+    "/appointments/:appointmentId/revert-completion",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["Appointments (Owner)"],
+        summary: "Revert a COMPLETED appointment to CONFIRMED with mandatory reason and OWNER password authorization",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["appointmentId"],
+          properties: { appointmentId: { type: "string", format: "uuid" } },
+        },
+        body: {
+          type: "object",
+          required: ["reason", "ownerPassword"],
+          properties: {
+            reason: { type: "string", minLength: 5, maxLength: 500 },
+            ownerPassword: { type: "string", minLength: 1, maxLength: 200 },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["appointment", "auditLog"],
+            properties: {
+              appointment: staffAppointmentOpenApiSchema,
+              auditLog: appointmentAuditLogOpenApiSchema,
+            },
+          },
+          400: errorOpenApiSchema,
+          401: errorOpenApiSchema,
+          403: errorOpenApiSchema,
+          404: errorOpenApiSchema,
+          409: errorOpenApiSchema,
+        },
+      },
+    },
+    appointmentsController.revertCompletion.bind(appointmentsController),
+  );
+
+  app.get(
+    "/appointments/:appointmentId/audit-logs",
+    {
+      preHandler: staffGuard,
+      schema: {
+        tags: ["Appointments (Owner & Collaborator)"],
+        summary: "List audit log entries for an appointment",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["appointmentId"],
+          properties: { appointmentId: { type: "string", format: "uuid" } },
+        },
+        response: {
+          200: { type: "array", items: appointmentAuditLogOpenApiSchema },
+          401: errorOpenApiSchema,
+          403: errorOpenApiSchema,
+          404: errorOpenApiSchema,
+        },
+      },
+    },
+    appointmentsController.listAuditLogs.bind(appointmentsController),
   );
 }

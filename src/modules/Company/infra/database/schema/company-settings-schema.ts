@@ -40,13 +40,33 @@ const customClientFields = z.array(z.object({
   id: customId, label: z.string().trim().min(1).max(80), mode,
 })).max(25).refine((fields) => new Set(fields.map((field) => field.id)).size === fields.length);
 const addressLine = z.string().trim().max(120);
+const brazilianAddress = z.object({
+  postalCode: addressLine.optional(), zipCode: addressLine.optional(),
+  street: addressLine.min(1), number: addressLine, district: addressLine, city: addressLine.min(1), state: addressLine,
+}).transform(({ postalCode, zipCode, ...address }) => ({ ...address, postalCode: postalCode ?? zipCode ?? "" }));
+const venezuelanAddress = z.object({
+  state: addressLine.min(1), city: addressLine.min(1), sector: addressLine.default(""),
+  addressLine: addressLine.min(1), referencePoint: addressLine.default(""),
+});
 export const settingsSchema = z.object({
-  address: z.object({
-    postalCode: addressLine, street: addressLine.min(1), number: addressLine, district: addressLine, city: addressLine.min(1), state: addressLine,
-  }).nullable(),
+  countryCode: z.enum(["BR", "VE"]).default("BR"),
+  documents: z.object({
+    countryCode: z.enum(["BR", "VE"]).optional(),
+    personalDoc: z.string().trim().max(32).optional(),
+    businessDoc: z.string().trim().max(32).optional(),
+  }).optional(),
+  description: z.string().max(1000).optional(),
+  address: z.union([venezuelanAddress, brazilianAddress]).nullable(),
   agendaInterval: z.literal([5, 10, 15, 30, 60]),
   bookingInterval: z.literal([0, 15, 20, 30, 60]),
   leadTime: z.literal([0, 30, 60, 120, 1440]),
+  maxAdvanceBookingDays: z.number().int().min(1).nullable().default(null),
+  allowClientCancel: z.boolean().default(true),
+  cancelLeadTime: z.number().int().min(0).optional(),
+  allowClientConfirm: z.boolean().default(true),
+  allowClientReschedule: z.boolean().default(true),
+  maxActiveBookingsPerClient: z.number().int().min(1).nullable().default(null),
+  newBookingCancelsPrevious: z.boolean().default(false),
   clientFields,
   clientFieldSlots: clientFieldSlots.nullable(),
   googlePlaceId: placeId.nullable(),
@@ -62,7 +82,9 @@ export const settingsSchema = z.object({
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaults: Settings = {
-  address: null, agendaInterval: 30, bookingInterval: 0, leadTime: 0,
+  countryCode: "BR", address: null, agendaInterval: 30, bookingInterval: 0, leadTime: 0,
+  maxAdvanceBookingDays: null, allowClientCancel: true, allowClientConfirm: true, allowClientReschedule: true,
+  maxActiveBookingsPerClient: null, newBookingCancelsPrevious: false,
   clientFields: { birthDate: "optional", document: "optional", email: "optional", gender: "optional", source: "optional" },
   birthdayRadar: false, surveyEnabled: false,
   googleMapsUrl: null, googleRating: null, googleReviewsCount: null, googlePlaceId: null, clientFieldSlots: null,
@@ -84,6 +106,13 @@ const clientFieldsPatch = publicClientFields.partial().catchall(mode).refine((fi
   "Campo de cliente desconhecido.",
 );
 export const settingsPatchSchema = settingsSchema.partial().extend({
+  countryCode: settingsSchema.shape.countryCode.removeDefault().optional(),
+  maxAdvanceBookingDays: settingsSchema.shape.maxAdvanceBookingDays.removeDefault().optional(),
+  allowClientCancel: settingsSchema.shape.allowClientCancel.removeDefault().optional(),
+  allowClientConfirm: settingsSchema.shape.allowClientConfirm.removeDefault().optional(),
+  allowClientReschedule: settingsSchema.shape.allowClientReschedule.removeDefault().optional(),
+  maxActiveBookingsPerClient: settingsSchema.shape.maxActiveBookingsPerClient.removeDefault().optional(),
+  newBookingCancelsPrevious: settingsSchema.shape.newBookingCancelsPrevious.removeDefault().optional(),
   clientFields: clientFieldsPatch.optional(),
   reminders: reminders.refine((value) =>
     (value.template !== "whatsapp" || !!value.servicePhone) && (value.template !== "external" || !!value.externalUrl),

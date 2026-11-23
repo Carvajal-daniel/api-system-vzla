@@ -110,6 +110,11 @@ export const rescheduleAppointmentBodySchema = z.object({
   collaboratorId: z.string().uuid("Invalid collaboratorId.").optional(),
 });
 
+export const revertCompletedAppointmentBodySchema = z.object({
+  reason: z.string().trim().min(5, "A justification reason with at least 5 characters is required.").max(500),
+  ownerPassword: z.string().min(1, "Owner password is required.").max(200),
+});
+
 // === OpenAPI / Swagger JSON Schemas ===
 
 export const errorOpenApiSchema = {
@@ -224,6 +229,42 @@ export const appointmentOpenApiSchema = {
 export const staffAppointmentOpenApiSchema = {
   ...appointmentOpenApiSchema,
   properties: { ...appointmentOpenApiSchema.properties, notes: { type: "string", nullable: true } },
+} as const;
+
+export const appointmentAuditLogOpenApiSchema = {
+  type: "object",
+  required: [
+    "id",
+    "companyId",
+    "appointmentId",
+    "action",
+    "previousStatus",
+    "newStatus",
+    "reason",
+    "authorizedById",
+    "authorizedByName",
+    "authorizedByRole",
+    "createdAt",
+  ],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    companyId: { type: "string", format: "uuid" },
+    appointmentId: { type: "string", format: "uuid" },
+    action: { type: "string" },
+    previousStatus: {
+      type: "string",
+      enum: ["PENDING", "CONFIRMED", "COMPLETED", "CANCELED", "NO_SHOW"],
+    },
+    newStatus: {
+      type: "string",
+      enum: ["PENDING", "CONFIRMED", "COMPLETED", "CANCELED", "NO_SHOW"],
+    },
+    reason: { type: "string" },
+    authorizedById: { type: "string", format: "uuid" },
+    authorizedByName: { type: "string" },
+    authorizedByRole: { type: "string" },
+    createdAt: { type: "string", format: "date-time" },
+  },
 } as const;
 
 export const availabilityResponseOpenApiSchema = {

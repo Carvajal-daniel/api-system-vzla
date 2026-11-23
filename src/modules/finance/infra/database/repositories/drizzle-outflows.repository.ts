@@ -4,7 +4,7 @@ import { db } from "../../../../../shared/database/database.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
 import { CollaboratorTable } from "../../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { AppointmentTable } from "../../../../appointments/infra/database/schema/appointments-schema.js";
-import type { CommissionDeductionInput, CommissionReport, ExpenseFilters, OutflowFilters, OutflowsRepository } from "../../../application/outflows.use-cases.js";
+import type { CollaboratorCommissionDetail, CommissionDeductionInput, CommissionDetailItem, CommissionReport, CommissionSettledBatch, ExpenseFilters, OutflowFilters, OutflowsRepository } from "../../../application/outflows.use-cases.js";
 import type { AppointmentStatusValue } from "../../../../appointments/domain/value-objects/appointment-status.vo.js";
 import { CollectionsError, getCommissionStatus } from "../../../domain/collections.js";
 import {
@@ -12,6 +12,7 @@ import {
   type PaidInput, type SettlementInput,
 } from "../../../domain/outflows.js";
 import { FinancialDocumentTable, ReceiptTable } from "../schema/collections-schema.js";
+import { FinanceOrderItemTable, FinanceOrderTable } from "../schema/orders-schema.js";
 import { CommissionDeductionApplicationTable, CommissionDeductionTable, CommissionSettlementTable, ExpenseTable } from "../schema/outflows-schema.js";
 import { expenseList, localDay, paymentInstant, type FinanceQuery } from "./outflow-projections.js";
 
@@ -244,12 +245,32 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
     const paidDay = localDay(timezone, FinancialDocumentTable.commissionPaidAt);
     const settlementDay = sql`timezone(${timezone}, ${CommissionSettlementTable.paidAt})::date`;
 
-    const [people, rows, settlements, legacy, deductions] = await Promise.all([
+    const [people, rows, orderItemRows, settlements, legacy, deductions] = await Promise.all([
       db.select({ collaboratorId: CollaboratorTable.id, name: CollaboratorTable.name }).from(CollaboratorTable).where(and(
         eq(CollaboratorTable.companyId, companyId),
         filters.collaboratorId ? eq(CollaboratorTable.id, filters.collaboratorId) : undefined,
       )).orderBy(asc(CollaboratorTable.name)),
       commissionRows(db, companyId, timezone, period),
+      // Comissões de vendas de produtos/serviços em comandas fechadas (excluindo serviços duplicados de agendamentos já vinculados)
+      db.select({
+        collaboratorId: FinanceOrderItemTable.collaboratorId,
+        commissionCents: FinanceOrderItemTable.commissionCents,
+        commissionStatus: FinanceOrderItemTable.commissionStatus,
+        itemType: FinanceOrderItemTable.itemType,
+        appointmentId: FinanceOrderTable.appointmentId,
+      })
+        .from(FinanceOrderItemTable)
+        .innerJoin(FinanceOrderTable, and(
+          eq(FinanceOrderTable.companyId, FinanceOrderItemTable.companyId),
+          eq(FinanceOrderTable.id, FinanceOrderItemTable.orderId),
+        ))
+        .where(and(
+          eq(FinanceOrderItemTable.companyId, companyId),
+          eq(FinanceOrderTable.status, "CLOSED"),
+          gte(FinanceOrderTable.orderDate, period.from),
+          lte(FinanceOrderTable.orderDate, period.to),
+          filters.collaboratorId ? eq(FinanceOrderItemTable.collaboratorId, filters.collaboratorId) : undefined,
+        )),
       db.select({ settlement: CommissionSettlementTable, collaboratorName: CollaboratorTable.name })
         .from(CommissionSettlementTable).innerJoin(CollaboratorTable, and(
           eq(CommissionSettlementTable.collaboratorId, CollaboratorTable.id),
@@ -293,6 +314,14 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
       if (status === "READY") person.payableInCents += row.generated;
       if (status === "AWAITING_COLLECTION") person.awaitingCollectionInCents += row.generated;
     }
+    for (const orderItem of orderItemRows) {
+      if (!orderItem.collaboratorId || orderItem.commissionCents <= 0) continue;
+      if (orderItem.itemType === "SERVICE" && orderItem.appointmentId) continue;
+      const person = byId.get(orderItem.collaboratorId);
+      if (!person) continue;
+      if (orderItem.commissionStatus === "PENDING") person.payableInCents += orderItem.commissionCents;
+      if (orderItem.commissionStatus === "PAID") person.paidInCents += orderItem.commissionCents;
+    }
     const history = [
       ...settlements.map(({ settlement, collaboratorName }) => ({ ...settlement, collaboratorName })),
       ...legacy.flatMap((row) => row.paidAt && row.amountCents ? [{
@@ -313,6 +342,182 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
       person.netPayableInCents = Math.max(0, person.payableInCents - person.deductionsInCents);
     }
     return { period, professionals, settlements: history };
+  }
+
+  async collaboratorCommissionDetail(
+    companyId: string,
+    collaboratorId: string,
+    filters: OutflowFilters,
+  ): Promise<CollaboratorCommissionDetail> {
+    const { today, timezone } = await companyPolicy(db, companyId);
+    const period: CommissionFilter = {
+      from: filters.from ?? today.slice(0, 7) + "-01",
+      to: filters.to ?? today,
+      collaboratorId,
+    };
+
+    const [professional] = await db
+      .select({ id: CollaboratorTable.id, name: CollaboratorTable.name })
+      .from(CollaboratorTable)
+      .where(and(eq(CollaboratorTable.companyId, companyId), eq(CollaboratorTable.id, collaboratorId)));
+
+    if (!professional) throw notFound();
+
+    const appointmentDay = localDay(timezone, AppointmentTable.startsAt);
+    const settlementDay = sql`timezone(${timezone}, ${CommissionSettlementTable.paidAt})::date`;
+
+    const [appointmentItems, orderItems, deductions, settlements] = await Promise.all([
+      db.select({
+        documentId: FinancialDocumentTable.id,
+        date: sql<string>`to_char(${appointmentDay}, 'YYYY-MM-DD')`,
+        clientName: AppointmentTable.clientName,
+        serviceName: AppointmentTable.serviceNameSnapshot,
+        baseAmountCents: AppointmentTable.servicePriceInCentsSnapshot,
+        commissionPercentage: AppointmentTable.commissionPercentageSnapshot,
+        generated: sql<number>`coalesce(${FinancialDocumentTable.generatedCommissionInCents},
+          round(${AppointmentTable.servicePriceInCentsSnapshot}::numeric * ${AppointmentTable.commissionPercentageSnapshot} / 100))`.mapWith(Number),
+        status: AppointmentTable.status,
+        paidAt: FinancialDocumentTable.commissionPaidAt,
+        settlementId: FinancialDocumentTable.commissionSettlementId,
+        net: FinancialDocumentTable.netInCents,
+        collected: received,
+      })
+        .from(AppointmentTable)
+        .leftJoin(FinancialDocumentTable, and(
+          eq(FinancialDocumentTable.companyId, AppointmentTable.companyId),
+          eq(FinancialDocumentTable.appointmentId, AppointmentTable.id),
+        ))
+        .where(and(
+          eq(AppointmentTable.companyId, companyId),
+          eq(AppointmentTable.collaboratorId, collaboratorId),
+          eq(AppointmentTable.status, "COMPLETED"),
+          gte(appointmentDay, sql`${period.from}::date`),
+          lte(appointmentDay, sql`${period.to}::date`),
+        ))
+        .orderBy(desc(AppointmentTable.startsAt)),
+      db.select({
+        id: FinanceOrderItemTable.id,
+        itemType: FinanceOrderItemTable.itemType,
+        date: FinanceOrderTable.orderDate,
+        clientName: FinanceOrderTable.clientName,
+        description: FinanceOrderItemTable.name,
+        baseAmountCents: FinanceOrderItemTable.subtotalCents,
+        commissionPercentage: FinanceOrderItemTable.commissionPercentage,
+        commissionCents: FinanceOrderItemTable.commissionCents,
+        commissionStatus: FinanceOrderItemTable.commissionStatus,
+        settlementId: FinanceOrderItemTable.commissionSettlementId,
+        appointmentId: FinanceOrderTable.appointmentId,
+      })
+        .from(FinanceOrderItemTable)
+        .innerJoin(FinanceOrderTable, and(
+          eq(FinanceOrderTable.companyId, FinanceOrderItemTable.companyId),
+          eq(FinanceOrderTable.id, FinanceOrderItemTable.orderId),
+        ))
+        .where(and(
+          eq(FinanceOrderItemTable.companyId, companyId),
+          eq(FinanceOrderItemTable.collaboratorId, collaboratorId),
+          eq(FinanceOrderTable.status, "CLOSED"),
+          gte(FinanceOrderTable.orderDate, period.from),
+          lte(FinanceOrderTable.orderDate, period.to),
+        ))
+        .orderBy(desc(FinanceOrderTable.orderDate), desc(FinanceOrderItemTable.createdAt)),
+      listCommissionDeductions(db, companyId, { collaboratorId, to: today }, true),
+      db.select()
+        .from(CommissionSettlementTable)
+        .where(and(
+          eq(CommissionSettlementTable.companyId, companyId),
+          eq(CommissionSettlementTable.collaboratorId, collaboratorId),
+          gte(settlementDay, sql`${period.from}::date`),
+          lte(settlementDay, sql`${period.to}::date`),
+        ))
+        .orderBy(desc(CommissionSettlementTable.paidAt)),
+    ]);
+
+    const pendingItems: CommissionDetailItem[] = [];
+    const settledItemsByBatch = new Map<string, CommissionDetailItem[]>();
+
+    for (const row of appointmentItems) {
+      const status = getCommissionStatus(
+        row.status as AppointmentStatusValue,
+        row.generated,
+        row.paidAt,
+        row.collected,
+        row.net ?? row.baseAmountCents,
+      );
+      const item: CommissionDetailItem = {
+        id: row.documentId ?? `${row.date}-${row.clientName}`,
+        source: "APPOINTMENT",
+        itemType: "SERVICE",
+        date: row.date,
+        clientName: row.clientName,
+        description: row.serviceName,
+        baseAmountCents: row.baseAmountCents,
+        commissionPercentage: row.commissionPercentage,
+        commissionCents: row.generated,
+      };
+      if (status === "READY" && row.generated > 0) {
+        pendingItems.push(item);
+      } else if (status === "PAID" && row.settlementId) {
+        const list = settledItemsByBatch.get(row.settlementId) ?? [];
+        list.push(item);
+        settledItemsByBatch.set(row.settlementId, list);
+      }
+    }
+
+    for (const row of orderItems) {
+      if (row.commissionCents <= 0) continue;
+      if (row.itemType === "SERVICE" && row.appointmentId) continue;
+      const item: CommissionDetailItem = {
+        id: row.id,
+        source: "ORDER",
+        itemType: row.itemType,
+        date: row.date,
+        clientName: row.clientName ?? "Venda Avulsa",
+        description: row.description,
+        baseAmountCents: row.baseAmountCents,
+        commissionPercentage: row.commissionPercentage,
+        commissionCents: row.commissionCents,
+      };
+      if (row.commissionStatus === "PENDING") {
+        pendingItems.push(item);
+      } else if (row.commissionStatus === "PAID" && row.settlementId) {
+        const list = settledItemsByBatch.get(row.settlementId) ?? [];
+        list.push(item);
+        settledItemsByBatch.set(row.settlementId, list);
+      }
+    }
+
+    pendingItems.sort((a, b) => b.date.localeCompare(a.date));
+
+    const settledHistory: CommissionSettledBatch[] = settlements.map((batch) => ({
+      id: batch.id,
+      paidAt: batch.paidAt.toISOString(),
+      periodStart: batch.periodStart,
+      periodEnd: batch.periodEnd,
+      amountCents: batch.amountCents,
+      paymentMethod: batch.paymentMethod,
+      notes: batch.notes,
+      items: settledItemsByBatch.get(batch.id) ?? [],
+    }));
+
+    const grossPendingCents = pendingItems.reduce((sum, item) => sum + item.commissionCents, 0);
+    const deductionsCents = deductions.reduce((sum, d) => sum + d.openAmountCents, 0);
+    const alreadyPaidCents = settledHistory.reduce((sum, s) => sum + s.amountCents, 0);
+    const netPayableCents = Math.max(0, grossPendingCents - deductionsCents);
+
+    return {
+      period,
+      collaborator: professional,
+      summary: {
+        grossPendingCents,
+        deductionsCents,
+        alreadyPaidCents,
+        netPayableCents,
+      },
+      pendingItems,
+      deductions,
+      settledHistory,
+    };
   }
 
   settle(companyId: string, actorId: string, input: SettlementInput) {
@@ -336,16 +541,42 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
         }
       }
       validatePaidDate(input.paidOn, today);
-      const [professional] = await tx.select({ id: CollaboratorTable.id }).from(CollaboratorTable).where(and(
+      const [professional] = await tx.select({ id: CollaboratorTable.id, name: CollaboratorTable.name }).from(CollaboratorTable).where(and(
         eq(CollaboratorTable.companyId, companyId), eq(CollaboratorTable.id, input.collaboratorId),
       ));
       if (!professional) throw notFound();
-      const rows = await commissionRows(tx, companyId, timezone, {
-        from: input.periodStart, to: input.periodEnd, collaboratorId: input.collaboratorId,
-      }, true);
+      const [rows, pendingOrderItems] = await Promise.all([
+        commissionRows(tx, companyId, timezone, {
+          from: input.periodStart, to: input.periodEnd, collaboratorId: input.collaboratorId,
+        }, true),
+        tx.select({
+          id: FinanceOrderItemTable.id,
+          commissionCents: FinanceOrderItemTable.commissionCents,
+          itemType: FinanceOrderItemTable.itemType,
+          appointmentId: FinanceOrderTable.appointmentId,
+        })
+          .from(FinanceOrderItemTable)
+          .innerJoin(FinanceOrderTable, and(
+            eq(FinanceOrderTable.companyId, FinanceOrderItemTable.companyId),
+            eq(FinanceOrderTable.id, FinanceOrderItemTable.orderId),
+          ))
+          .where(and(
+            eq(FinanceOrderItemTable.companyId, companyId),
+            eq(FinanceOrderItemTable.collaboratorId, input.collaboratorId),
+            eq(FinanceOrderItemTable.commissionStatus, "PENDING"),
+            eq(FinanceOrderTable.status, "CLOSED"),
+            gte(FinanceOrderTable.orderDate, input.periodStart),
+            lte(FinanceOrderTable.orderDate, input.periodEnd),
+          )),
+      ]);
       const eligible = rows.filter((row) => row.documentId &&
         getCommissionStatus("COMPLETED", row.generated, row.paidAt, row.collected, row.net ?? row.price) === "READY");
-      const grossCents = eligible.reduce((sum, row) => sum + row.generated, 0);
+      const eligibleOrderItems = pendingOrderItems.filter(
+        (item) => item.commissionCents > 0 && !(item.itemType === "SERVICE" && item.appointmentId),
+      );
+      const grossCents =
+        eligible.reduce((sum, row) => sum + row.generated, 0) +
+        eligibleOrderItems.reduce((sum, item) => sum + item.commissionCents, 0);
       if (!grossCents) throw new CollectionsError("CONFLICT", "FINANCE_COMMISSION_NOT_READY");
       const deductions = await listCommissionDeductions(tx, companyId, {
         collaboratorId: input.collaboratorId, to: input.paidOn,
@@ -375,6 +606,19 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
           isNull(FinancialDocumentTable.commissionSettlementId), inArray(FinancialDocumentTable.id, ids))).returning({ id: FinancialDocumentTable.id });
         if (updated.length !== ids.length) throw new CollectionsError("CONFLICT", "FINANCE_COMMISSION_TOTAL_CHANGED");
       }
+      for (let start = 0; start < eligibleOrderItems.length; start += 1000) {
+        const ids = eligibleOrderItems.slice(start, start + 1000).map((item) => item.id);
+        const updated = await tx.update(FinanceOrderItemTable).set({
+          commissionStatus: "PAID",
+          commissionSettlementId: settlement!.id,
+          settledAt: settlement!.paidAt,
+        }).where(and(
+          eq(FinanceOrderItemTable.companyId, companyId),
+          eq(FinanceOrderItemTable.commissionStatus, "PENDING"),
+          inArray(FinanceOrderItemTable.id, ids),
+        )).returning({ id: FinanceOrderItemTable.id });
+        if (updated.length !== ids.length) throw new CollectionsError("CONFLICT", "FINANCE_COMMISSION_TOTAL_CHANGED");
+      }
       for (const { deduction, applied } of applications) {
         await tx.insert(CommissionDeductionApplicationTable).values({
           companyId, deductionId: deduction.id, settlementId: settlement!.id, amountCents: applied,
@@ -383,6 +627,26 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
           await tx.update(CommissionDeductionTable).set({ settlementId: settlement!.id })
             .where(and(eq(CommissionDeductionTable.companyId, companyId), eq(CommissionDeductionTable.id, deduction.id)));
         }
+      }
+      // Gera lançamento financeiro de saída para refletir a liquidação no fluxo de caixa/despesas
+      if (amountCents > 0) {
+        await tx.insert(ExpenseTable).values({
+          companyId,
+          description: `Liquidação de comissão — ${professional.name} (${input.periodStart} a ${input.periodEnd})`,
+          category: "OTHER",
+          expenseType: "VARIABLE",
+          amountCents,
+          quantity: 1,
+          unitAmountCents: amountCents,
+          dueDate: input.paidOn,
+          paidAt: settlement!.paidAt,
+          paymentMethod: input.paymentMethod,
+          status: "PAID",
+          isRecurring: false,
+          notes: input.notes,
+          externalSourceType: "COMMISSION_SETTLEMENT",
+          externalSourceId: settlement!.id,
+        });
       }
       return settlement!;
     });

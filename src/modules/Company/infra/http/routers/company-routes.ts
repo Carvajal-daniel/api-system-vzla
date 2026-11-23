@@ -2,14 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../../../../shared/database/database.js";
-import { CommissionDeductionTable, ExpenseTable } from "../../../../finance/infra/database/schema/outflows-schema.js";
-import { InventoryMovementTable } from "../../../../inventory/infra/database/schema/inventory-schema.js";
-import { FinancialDocumentTable, ReceiptTable } from "../../../../finance/infra/database/schema/collections-schema.js";
 import { CollectionsError } from "../../../../finance/domain/collections.js";
 import { CompanyTable } from "../../database/schema/companies-schema.js";
 import { resolveCompanyRankingWeights } from "../../../domain/ranking-weights.js";
 import { authenticate, authorizeRoles } from "../../../../../shared/http/auth/authenticate.js";
 import { updateCompanyTimezoneSchema } from "../../../../../shared/utils/validation-schemas.js";
+import { updateCompanyCurrency } from "../../database/repositories/update-company-currency.js";
 import { CompanyRepositoryDB } from "../../database/repositories/companies-repository.impl.js";
 import { MakeCreateController } from "../factories/make-create-user-controller.js";
 
@@ -95,27 +93,7 @@ export async function ComapnyRoutes(app: FastifyInstance) {
       throw new CollectionsError("FORBIDDEN", "FINANCE_OWNER_REQUIRED");
     }
     const { currency } = z.object({ currency: z.enum(["BRL", "USD", "VES"]) }).parse(request.body);
-    const updated = await db.transaction(async (tx) => {
-      const [company] = await tx.select({ currency: CompanyTable.currency }).from(CompanyTable)
-        .where(eq(CompanyTable.id, actor.companyId)).for("update");
-      if (!company) throw new CollectionsError("NOT_FOUND", "FINANCE_RECORD_NOT_FOUND");
-      if (company.currency === currency) return company;
-      const [receipt] = await tx.select({ id: ReceiptTable.id }).from(ReceiptTable)
-        .where(eq(ReceiptTable.companyId, actor.companyId)).limit(1);
-      const [expense] = await tx.select({ id: ExpenseTable.id }).from(ExpenseTable)
-        .where(eq(ExpenseTable.companyId, actor.companyId)).limit(1);
-      const [deduction] = await tx.select({ id: CommissionDeductionTable.id }).from(CommissionDeductionTable)
-        .where(eq(CommissionDeductionTable.companyId, actor.companyId)).limit(1);
-      const [sale] = await tx.select({ id: InventoryMovementTable.id }).from(InventoryMovementTable).where(and(
-        eq(InventoryMovementTable.companyId, actor.companyId), eq(InventoryMovementTable.movementType, "SALE_OUT"),
-      )).limit(1);
-      if (receipt || expense || deduction || sale) throw new CollectionsError("CONFLICT", "FINANCE_CURRENCY_LOCKED");
-      await tx.update(FinancialDocumentTable).set({ currency })
-        .where(eq(FinancialDocumentTable.companyId, actor.companyId));
-      await tx.update(CompanyTable).set({ currency, monthlyGoalCurrency: currency, updatedAt: new Date() })
-        .where(eq(CompanyTable.id, actor.companyId));
-      return { currency };
-    });
+    const updated = await db.transaction((tx) => updateCompanyCurrency(tx, actor.companyId, currency));
     return reply.send(updated);
   });
 

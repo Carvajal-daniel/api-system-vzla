@@ -105,4 +105,40 @@ export async function outflowRoutes(app: FastifyInstance) {
     settlements.list(actor(request), filters.parse(request.query ?? {})));
   app.post("/finance/commission-settlements", policy, async (request, reply) =>
     reply.status(201).send(await settlements.record(actor(request), settlementInput.parse(request.body))));
+
+  // Endpoints detalhados por profissional (Bloco 3)
+  const collaboratorParams = z.object({ collaboratorId: z.uuid() });
+  const collaboratorSettleBody = z.object({
+    ...payment,
+    periodStart: date,
+    periodEnd: date,
+    expectedAmountCents: z.number().int().nonnegative().max(2147483647).nullish().transform((value) => value ?? null),
+    requestKey,
+    notes: optionalNotes,
+  });
+
+  app.get("/v1/commissions/collaborators/:collaboratorId", {
+    ...policy,
+    schema: {
+      ...policy.schema,
+      summary: "Get detailed commission report (pending services/products, deductions and settled history) for a collaborator",
+    },
+  }, async (request) => {
+    const { collaboratorId } = collaboratorParams.parse(request.params);
+    return settlements.detail(actor(request), collaboratorId, filters.parse(request.query ?? {}));
+  });
+
+  app.post("/v1/commissions/collaborators/:collaboratorId/settle", {
+    ...policy,
+    schema: {
+      ...policy.schema,
+      summary: "Settle all pending commissions for a collaborator in the period and record financial outflow",
+    },
+  }, async (request, reply) => {
+    const { collaboratorId } = collaboratorParams.parse(request.params);
+    const body = collaboratorSettleBody.parse(request.body);
+    return reply.status(201).send(
+      await settlements.record(actor(request), { ...body, collaboratorId }),
+    );
+  });
 }

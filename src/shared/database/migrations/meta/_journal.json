@@ -113,6 +113,27 @@
       "when": 1795380000000,
       "tag": "0015_password_recovery_and_client_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795466400000,
+      "tag": "0016_client_recovery_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795552800000,
+      "tag": "0017_finance_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795639200000,
+      "tag": "0018_appointment_audit_logs",
+      "breakpoints": true
     }
   ]
 }

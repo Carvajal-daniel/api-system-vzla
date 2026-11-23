@@ -28,6 +28,7 @@ export const collectionErrors = {
   permission: "FINANCE_OWNER_REQUIRED",
   missing: "FINANCE_RECORD_NOT_FOUND",
   appointmentStatus: "FINANCE_APPOINTMENT_NOT_COLLECTIBLE",
+  alreadyPaid: "FINANCE_APPOINTMENT_ALREADY_PAID",
   amount: "FINANCE_AMOUNT_EXCEEDS_BALANCE",
   date: "FINANCE_INVALID_EFFECTIVE_DATE",
   idempotency: "FINANCE_IDEMPOTENCY_CONFLICT",
@@ -101,6 +102,10 @@ export class RecordAppointmentReceipts {
       const balance = appointmentBalance(context.receivable, context.receipts);
       if (balance.status !== "CONFIRMED" && balance.status !== "COMPLETED") {
         throw new CollectionsError("CONFLICT", collectionErrors.appointmentStatus);
+      }
+      // Bloqueia cobrança duplicada em atendimento já quitado integralmente
+      if (balance.openInCents === 0) {
+        throw new CollectionsError("CONFLICT", collectionErrors.alreadyPaid);
       }
       const amount = items.reduce((total, item) => total + item.amountInCents, 0);
       if (items.some((item) => !Number.isSafeInteger(item.amountInCents) || item.amountInCents <= 0) ||

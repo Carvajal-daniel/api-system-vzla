@@ -34,6 +34,10 @@ const avatarUrlSchema = z
     "Avatar must be a valid image URL or base64 data URI.",
   );
 
+const operatingTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+const operatingShift = z.object({ start: operatingTime, end: operatingTime })
+  .refine(({ start, end }) => start < end, { message: "Invalid shift hours." });
+
 export const updateProfileBodySchema = z
   .object({
     name: nameSchema.optional(),
@@ -46,9 +50,23 @@ export const updateProfileBodySchema = z
         z.object({
           dayOfWeek: z.number().int().min(0).max(6),
           isOpen: z.boolean(),
-          openTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-          closeTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-        }).refine((day) => !day.isOpen || !!(day.openTime && day.closeTime && day.openTime < day.closeTime), { message: "Invalid opening hours." }),
+          openTime: operatingTime.nullable().optional(),
+          closeTime: operatingTime.nullable().optional(),
+          shifts: z.array(operatingShift).max(3).optional(),
+        }).superRefine((day, context) => {
+          const shifts = day.shifts?.slice().sort((a, b) => a.start.localeCompare(b.start));
+          if (shifts?.some((shift, index) => index > 0 && shifts[index - 1]!.end > shift.start)) {
+            context.addIssue({ code: "custom", path: ["shifts"], message: "Operating shifts overlap." });
+          }
+          if (day.isOpen && (shifts ? shifts.length === 0 : !(day.openTime && day.closeTime && day.openTime < day.closeTime))) {
+            context.addIssue({ code: "custom", message: "Invalid opening hours." });
+          }
+        }).transform(({ dayOfWeek, isOpen, openTime, closeTime, shifts }) => {
+          if (!isOpen) return { dayOfWeek, isOpen, openTime: null, closeTime: null };
+          const ordered = shifts?.slice().sort((a, b) => a.start.localeCompare(b.start));
+          return { dayOfWeek, isOpen, openTime: ordered?.[0]?.start ?? openTime ?? null,
+            closeTime: ordered?.at(-1)?.end ?? closeTime ?? null, ...(ordered ? { shifts: ordered } : {}) };
+        }),
       ).max(7).refine((days) => new Set(days.map((day) => day.dayOfWeek)).size === days.length, { message: "Duplicate weekday." })
       .nullable()
       .optional(),
@@ -174,6 +192,9 @@ export const getMeOpenApiSchema = {
               type: "object", properties: {
                 dayOfWeek: { type: "integer" }, isOpen: { type: "boolean" },
                 openTime: { type: "string", nullable: true }, closeTime: { type: "string", nullable: true },
+                shifts: { type: "array", items: { type: "object", properties: {
+                  start: { type: "string" }, end: { type: "string" },
+                }, required: ["start", "end"] } },
               },
             } },
           },
