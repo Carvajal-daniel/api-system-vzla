@@ -21,9 +21,11 @@ export function registerErrorHandler(app: FastifyInstance): void {
 
     if (error instanceof DomainError) {
       const statusCode = DOMAIN_ERROR_STATUS_MAP[error.code];
-      return reply.status(statusCode).send({
-        message: error.message,
-      });
+      return reply.status(statusCode).send(
+        error.reasonCode
+          ? { code: error.reasonCode, message: error.message }
+          : { message: error.message },
+      );
     }
 
     if (error instanceof AppError) {

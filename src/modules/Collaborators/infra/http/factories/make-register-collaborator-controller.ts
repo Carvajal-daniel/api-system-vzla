@@ -14,6 +14,16 @@ import { UpdateCollaboratorUseCase } from "../../../application/update-collabora
 import { UploadCollaboratorAvatarUseCase } from "../../../application/upload-collaborator-avatar.usecase.js";
 import type { CollaboratorsRepository } from "../../../domain/repository/collaborators.repository.interface.js";
 import { CollaboratorRepositoryDB } from "../../database/repositories/collaborators-repository.impl.js";
+import { DrizzleAppointmentsRepository } from "../../../../appointments/infra/database/repositories/drizzle-appointments.repository.js";
+import { DrizzleClientsRepository } from "../../../../clients/infra/database/repositories/drizzle-clients.repository.js";
+import { AesSecretCipher } from "../../../../whatsapp/infra/crypto/aes-secret-cipher.js";
+import { DrizzleCompanyWhatsAppConnectionRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-company-whatsapp-connection.repository.js";
+import { DrizzleWhatsAppConversationsRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-whatsapp-conversations.repository.js";
+import { DrizzleWhatsAppMessagesRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-whatsapp-messages.repository.js";
+import { WhatsAppAbsenceNotificationAdapter } from "../../../../whatsapp/infra/notifications/whatsapp-absence-notification.adapter.js";
+import { DatafyWhatsAppAdapter } from "../../../../whatsapp/infra/whatsapp/datafy-whatsapp.adapter.js";
+import { EvolutionWhatsAppAdapter } from "../../../../whatsapp/infra/whatsapp/evolution-whatsapp.adapter.js";
+import { WhatsAppGatewayRouter } from "../../../../whatsapp/infra/whatsapp/whatsapp-gateway-router.js";
 import { CollaboratorsManagementController } from "../controllers/collaborators-management.controller.js";
 import { RegisterCollaboratorController } from "../controllers/register-collaborator.controller.js";
 
@@ -38,6 +48,18 @@ export function makeCollaboratorsManagementController(
   const repository = deps.collaboratorsRepository ?? new CollaboratorRepositoryDB();
   const passwordHasher = deps.passwordHasher ?? new BcryptPasswordHasher();
 
+  const absenceNotificationPort = new WhatsAppAbsenceNotificationAdapter(
+    new WhatsAppGatewayRouter(
+      new DrizzleCompanyWhatsAppConnectionRepository(),
+      new EvolutionWhatsAppAdapter(),
+      new DatafyWhatsAppAdapter(),
+      new AesSecretCipher(),
+    ),
+    new DrizzleWhatsAppConversationsRepository(),
+    new DrizzleWhatsAppMessagesRepository(),
+    new DrizzleClientsRepository(),
+  );
+
   return new CollaboratorsManagementController({
     listCompanyCollaboratorsUseCase: new ListCompanyCollaboratorsUseCase(repository),
     getCollaboratorProfileUseCase: new GetCollaboratorProfileUseCase(repository),
@@ -49,7 +71,11 @@ export function makeCollaboratorsManagementController(
       passwordHasher,
     ),
     countFutureAppointmentsUseCase: new CountFutureAppointmentsUseCase(repository),
-    deactivateCollaboratorUseCase: new DeactivateCollaboratorUseCase(repository),
+    deactivateCollaboratorUseCase: new DeactivateCollaboratorUseCase(
+      repository,
+      new DrizzleAppointmentsRepository(),
+      absenceNotificationPort,
+    ),
     uploadCollaboratorAvatarUseCase: new UploadCollaboratorAvatarUseCase(repository),
     closeMonthAwardUseCase: new CloseMonthAwardUseCase(repository),
     updateCollaboratorStatusUseCase: new UpdateCollaboratorStatusUseCase(repository),

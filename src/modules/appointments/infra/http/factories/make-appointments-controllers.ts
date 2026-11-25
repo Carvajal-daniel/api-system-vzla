@@ -21,7 +21,15 @@ import type { SchedulingContextLookupRepository } from "../../../domain/reposito
 import { DrizzleAppointmentsRepository } from "../../database/repositories/drizzle-appointments.repository.js";
 import { DrizzleScheduleBlocksRepository } from "../../database/repositories/drizzle-schedule-blocks.repository.js";
 import { DrizzleSchedulingContextLookupRepository } from "../../database/repositories/drizzle-scheduling-context-lookup.repository.js";
-import { NoopAbsenceNotificationAdapter } from "../../notifications/noop-absence-notification.adapter.js";
+import { DrizzleClientsRepository } from "../../../../clients/infra/database/repositories/drizzle-clients.repository.js";
+import { AesSecretCipher } from "../../../../whatsapp/infra/crypto/aes-secret-cipher.js";
+import { DrizzleCompanyWhatsAppConnectionRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-company-whatsapp-connection.repository.js";
+import { DrizzleWhatsAppConversationsRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-whatsapp-conversations.repository.js";
+import { DrizzleWhatsAppMessagesRepository } from "../../../../whatsapp/infra/database/repositories/drizzle-whatsapp-messages.repository.js";
+import { WhatsAppAbsenceNotificationAdapter } from "../../../../whatsapp/infra/notifications/whatsapp-absence-notification.adapter.js";
+import { DatafyWhatsAppAdapter } from "../../../../whatsapp/infra/whatsapp/datafy-whatsapp.adapter.js";
+import { EvolutionWhatsAppAdapter } from "../../../../whatsapp/infra/whatsapp/evolution-whatsapp.adapter.js";
+import { WhatsAppGatewayRouter } from "../../../../whatsapp/infra/whatsapp/whatsapp-gateway-router.js";
 import { AppointmentsController } from "../controllers/appointments.controller.js";
 import { ScheduleBlocksController } from "../controllers/schedule-blocks.controller.js";
 
@@ -71,7 +79,18 @@ export function makeAppointmentsControllers(
   const lookupRepository =
     deps.lookupRepository ?? new DrizzleSchedulingContextLookupRepository();
   const absenceNotificationPort =
-    deps.absenceNotificationPort ?? new NoopAbsenceNotificationAdapter();
+    deps.absenceNotificationPort ??
+    new WhatsAppAbsenceNotificationAdapter(
+      new WhatsAppGatewayRouter(
+        new DrizzleCompanyWhatsAppConnectionRepository(),
+        new EvolutionWhatsAppAdapter(),
+        new DatafyWhatsAppAdapter(),
+        new AesSecretCipher(),
+      ),
+      new DrizzleWhatsAppConversationsRepository(),
+      new DrizzleWhatsAppMessagesRepository(),
+      new DrizzleClientsRepository(),
+    );
   const ownerAuthorizationVerifier =
     deps.ownerAuthorizationVerifier ?? new DrizzleOwnerAuthorizationVerifier();
 

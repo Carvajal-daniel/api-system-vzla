@@ -134,6 +134,34 @@
       "when": 1795639200000,
       "tag": "0018_appointment_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795725600000,
+      "tag": "0019_owner_pin_and_order_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795812000000,
+      "tag": "0020_clients_and_whatsapp_connections",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795898400000,
+      "tag": "0021_whatsapp_conversations_and_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795984800000,
+      "tag": "0022_ai_conversation_insights",
+      "breakpoints": true
     }
   ]
 }

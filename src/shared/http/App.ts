@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { join } from "node:path";
 import fastify from "fastify";
 import fastifyCors from "@fastify/cors";
@@ -7,6 +8,7 @@ import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
 import { clientRecoveryRoutes } from "../../modules/clients/infra/http/client-recovery.routes.js";
+import { clientsRoutes } from "../../modules/clients/infra/http/clients.routes.js";
 import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import { googlePlaceRoutes } from "../../modules/Company/infra/http/google-place.routes.js";
@@ -18,6 +20,7 @@ import { orderRoutes } from "../../modules/finance/infra/http/routes/order.route
 import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.routes.js";
 import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
+import { whatsappRoutes } from "../../modules/whatsapp/infra/http/whatsapp.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
 import { getCorsOrigins, isProduction } from "../config/env.js";
 import { registerErrorHandler } from "./error-handler.js";
@@ -88,5 +91,7 @@ app.register(orderRoutes);
 app.register(outflowRoutes);
 app.register(inventoryRoutes);
 app.register(clientRecoveryRoutes);
+app.register(clientsRoutes);
+app.register(whatsappRoutes);
 
 export { app };
