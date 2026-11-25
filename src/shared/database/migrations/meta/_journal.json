@@ -162,6 +162,13 @@
       "when": 1795984800000,
       "tag": "0022_ai_conversation_insights",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795637459532,
+      "tag": "0023_ai_governance_and_channels",
+      "breakpoints": true
     }
   ]
 }

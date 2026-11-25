@@ -26,6 +26,10 @@ function mapRow(
     assignedMode: row.assignedMode,
     unreadCount: row.unreadCount,
     lastMessageAt: row.lastMessageAt,
+    aiPausedUntil: row.aiPausedUntil,
+    lastAiSessionAt: row.lastAiSessionAt,
+    hourlyMessageCount: row.hourlyMessageCount,
+    hourlyWindowStartAt: row.hourlyWindowStartAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });

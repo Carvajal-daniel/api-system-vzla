@@ -10,6 +10,7 @@ import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes
 import { clientRecoveryRoutes } from "../../modules/clients/infra/http/client-recovery.routes.js";
 import { clientsRoutes } from "../../modules/clients/infra/http/clients.routes.js";
 import { authRoutes } from "../../modules/auth/infra/http/routes/auth.routes.js";
+import { billingRoutes } from "../../modules/billing/infra/http/billing.routes.js";
 import { CollaboratorRoutes } from "../../modules/Collaborators/infra/http/routers/collaborator-routes.js";
 import { googlePlaceRoutes } from "../../modules/Company/infra/http/google-place.routes.js";
 import { companySettingsRoutes } from "../../modules/Company/infra/http/company-settings.routes.js";
@@ -93,5 +94,6 @@ app.register(inventoryRoutes);
 app.register(clientRecoveryRoutes);
 app.register(clientsRoutes);
 app.register(whatsappRoutes);
+app.register(billingRoutes);
 
 export { app };

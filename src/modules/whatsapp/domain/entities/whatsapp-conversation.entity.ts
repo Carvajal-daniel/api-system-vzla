@@ -19,6 +19,10 @@ export interface WhatsAppConversationProps {
   assignedMode: WhatsAppAssignedMode;
   unreadCount: number;
   lastMessageAt: Date;
+  aiPausedUntil: Date | null;
+  lastAiSessionAt: Date | null;
+  hourlyMessageCount: number;
+  hourlyWindowStartAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +37,10 @@ export interface WhatsAppConversationDTO {
   assignedMode: WhatsAppAssignedMode;
   unreadCount: number;
   lastMessageAt: string;
+  aiPausedUntil: string | null;
+  lastAiSessionAt: string | null;
+  hourlyMessageCount: number;
+  hourlyWindowStartAt: string | null;
   createdAt: string;
   updatedAt: string;
   lastMessagePreview?: string | null;
@@ -68,13 +76,40 @@ export class WhatsAppConversation {
       assignedMode: input.assignedMode ?? "AI_AUTOPILOT",
       unreadCount: Math.max(0, input.unreadCount ?? 0),
       lastMessageAt: now,
+      aiPausedUntil: null,
+      lastAiSessionAt: null,
+      hourlyMessageCount: 0,
+      hourlyWindowStartAt: null,
       createdAt: now,
       updatedAt: now,
     });
   }
 
-  public static restore(props: WhatsAppConversationProps): WhatsAppConversation {
-    return new WhatsAppConversation(props);
+  public static restore(
+    props: Omit<
+      WhatsAppConversationProps,
+      | "aiPausedUntil"
+      | "lastAiSessionAt"
+      | "hourlyMessageCount"
+      | "hourlyWindowStartAt"
+    > &
+      Partial<
+        Pick<
+          WhatsAppConversationProps,
+          | "aiPausedUntil"
+          | "lastAiSessionAt"
+          | "hourlyMessageCount"
+          | "hourlyWindowStartAt"
+        >
+      >,
+  ): WhatsAppConversation {
+    return new WhatsAppConversation({
+      ...props,
+      aiPausedUntil: props.aiPausedUntil ?? null,
+      lastAiSessionAt: props.lastAiSessionAt ?? null,
+      hourlyMessageCount: props.hourlyMessageCount ?? 0,
+      hourlyWindowStartAt: props.hourlyWindowStartAt ?? null,
+    });
   }
 
   public get id(): string {
@@ -113,6 +148,22 @@ export class WhatsAppConversation {
     return this.props.lastMessageAt;
   }
 
+  public get aiPausedUntil(): Date | null {
+    return this.props.aiPausedUntil;
+  }
+
+  public get lastAiSessionAt(): Date | null {
+    return this.props.lastAiSessionAt;
+  }
+
+  public get hourlyMessageCount(): number {
+    return this.props.hourlyMessageCount;
+  }
+
+  public get hourlyWindowStartAt(): Date | null {
+    return this.props.hourlyWindowStartAt;
+  }
+
   public get createdAt(): Date {
     return this.props.createdAt;
   }
@@ -136,6 +187,16 @@ export class WhatsAppConversation {
       assignedMode: this.props.assignedMode,
       unreadCount: this.props.unreadCount,
       lastMessageAt: this.props.lastMessageAt.toISOString(),
+      aiPausedUntil: this.props.aiPausedUntil
+        ? this.props.aiPausedUntil.toISOString()
+        : null,
+      lastAiSessionAt: this.props.lastAiSessionAt
+        ? this.props.lastAiSessionAt.toISOString()
+        : null,
+      hourlyMessageCount: this.props.hourlyMessageCount,
+      hourlyWindowStartAt: this.props.hourlyWindowStartAt
+        ? this.props.hourlyWindowStartAt.toISOString()
+        : null,
       createdAt: this.props.createdAt.toISOString(),
       updatedAt: this.props.updatedAt.toISOString(),
       ...(lastMessagePreview !== undefined ? { lastMessagePreview } : {}),

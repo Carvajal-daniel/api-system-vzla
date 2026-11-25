@@ -46,6 +46,13 @@ export const WhatsAppConversationsTable = pgTable(
     lastMessageAt: timestamp("last_message_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // Controle de pausa temporária da IA, janela de sessão de 6h e rate limit por hora da conversa.
+    aiPausedUntil: timestamp("ai_paused_until", { withTimezone: true }),
+    lastAiSessionAt: timestamp("last_ai_session_at", { withTimezone: true }),
+    hourlyMessageCount: integer("hourly_message_count").default(0).notNull(),
+    hourlyWindowStartAt: timestamp("hourly_window_start_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -73,6 +80,10 @@ export const WhatsAppConversationsTable = pgTable(
     check(
       "whatsapp_conversations_unread_non_negative_chk",
       sql`${table.unreadCount} >= 0`,
+    ),
+    check(
+      "whatsapp_conversations_hourly_count_non_negative_chk",
+      sql`${table.hourlyMessageCount} >= 0`,
     ),
   ],
 );
