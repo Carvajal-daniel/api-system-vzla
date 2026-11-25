@@ -27,7 +27,12 @@ import { UpdateWhatsAppConversationModeUseCase } from "../../application/use-cas
 import { UpdateWhatsAppSettingsUseCase } from "../../application/use-cases/update-whatsapp-settings.use-case.js";
 import { EvolutionWhatsAppAdapter as HybridEvolutionWhatsAppAdapter } from "../adapters/whatsapp/evolution-whatsapp.adapter.js";
 import { WhatsAppGatewayRouter as HybridWhatsAppGatewayRouter } from "../adapters/whatsapp/whatsapp-gateway.router.js";
-import { registerEvolutionChannelsWebhookRoutes } from "./evolution-channels-webhook.routes.js";
+import {
+  extractCleanPhoneFromJid,
+  readEvolutionMessageId,
+  registerEvolutionChannelsWebhookRoutes,
+  type EvolutionWebhookEventPayload,
+} from "./evolution-channels-webhook.routes.js";
 import { ResilientBusinessCopilotAdapter } from "../ai/business-copilot.adapter.js";
 import { ResilientConversationAnalyzerAdapter } from "../ai/conversation-analyzer.adapter.js";
 import { createAiBookingAgentAdapter } from "../ai/create-ai-booking-agent.js";
@@ -111,32 +116,8 @@ const copilotChatBodySchema = z.object({
     .optional(),
 });
 
-interface EvolutionWebhookPayload {
-  event?: string;
-  instance?: string;
-  apikey?: string;
-  data?: {
-    key?: {
-      id?: string;
-      fromMe?: boolean;
-      remoteJid?: string;
-      remoteJidAlt?: string;
-    };
-    pushName?: string;
-    messageTimestamp?: number | string;
-    message?: {
-      conversation?: string;
-      extendedTextMessage?: { text?: string };
-      imageMessage?: { caption?: string };
-      videoMessage?: { caption?: string };
-      buttonsResponseMessage?: { selectedDisplayText?: string };
-      listResponseMessage?: { title?: string };
-    };
-  };
-}
-
 function extractEvolutionText(
-  message: NonNullable<EvolutionWebhookPayload["data"]>["message"],
+  message: NonNullable<EvolutionWebhookEventPayload["data"]>["message"],
 ): string | null {
   if (!message) return null;
   const raw =
@@ -150,19 +131,6 @@ function extractEvolutionText(
 
   const trimmed = raw?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
-function extractPhoneFromJid(jid?: string): string | null {
-  if (!jid) return null;
-  // Ignora grupos (@g.us) e broadcasts/status
-  if (jid.includes("@g.us") || jid.includes("status@broadcast")) {
-    return null;
-  }
-  const digits = jid.replace(/@.*$/, "").replace(/\D/g, "");
-  if (digits.length < 10 || digits.length > 15) {
-    return null;
-  }
-  return `+${digits}`;
 }
 
 const ownerGuard = [authenticate, authorizeRoles("OWNER")];
@@ -246,7 +214,9 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
   const hybridGatewayRouter = new HybridWhatsAppGatewayRouter(
     tenantChannelsRepository,
   );
-  const turnOrchestrator = new WhatsAppAiTurnOrchestrator(hybridGatewayRouter);
+  const turnOrchestrator = new WhatsAppAiTurnOrchestrator(hybridGatewayRouter, {
+    logger: app.log,
+  });
   const proactiveInsightsWriter = new DrizzleProactiveInsightsWriter();
   const postVisitNpsRepository = new DrizzlePostVisitNpsRepository();
   const processPostVisitNpsUseCase = new ProcessPostVisitNpsUseCase(
@@ -414,7 +384,7 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const payload = (request.body ?? {}) as EvolutionWebhookPayload;
+      const payload = (request.body ?? {}) as EvolutionWebhookEventPayload;
 
       // Valida segredo compartilhado quando configurado no ambiente (ou em produção)
       const expectedToken =
@@ -466,14 +436,19 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const phone =
-        extractPhoneFromJid(payload.data?.key?.remoteJid) ??
-        extractPhoneFromJid(payload.data?.key?.remoteJidAlt);
+        extractCleanPhoneFromJid(payload.data?.key?.remoteJid) ??
+        extractCleanPhoneFromJid(payload.data?.key?.remoteJidAlt);
       const text = extractEvolutionText(payload.data?.message);
 
       if (!phone || !text) {
         return reply
           .status(200)
           .send({ ignored: true, reason: "UNSUPPORTED_MESSAGE" });
+      }
+
+      const externalMessageId = readEvolutionMessageId(payload.data);
+      if (!externalMessageId) {
+        return reply.status(200).send({ ignored: true, reason: "MISSING_MESSAGE_ID" });
       }
 
       const timestampRaw = payload.data?.messageTimestamp;
@@ -492,7 +467,7 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
         phone,
         contactName: payload.data?.pushName ?? null,
         content: text,
-        externalMessageId: payload.data?.key?.id ?? null,
+        externalMessageId,
         sentAt,
         source: "WEBHOOK",
       });

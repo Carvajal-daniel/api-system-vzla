@@ -8,7 +8,8 @@ export interface AiBookingContextProviderPort {
   buildContextAndTools(input: {
     companyId: string;
     aiSystemPrompt: string | null;
-    clientName: string;
+    clientId?: string | null | undefined;
+    clientName: string | null;
     clientPhone: string;
   }): Promise<{
     company: AiBookingCompanyContext;

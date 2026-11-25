@@ -6,13 +6,16 @@ import type {
 } from "../../application/ports/ai-booking-agent.port.js";
 import {
   AI_BOOKING_TOOL_DEFINITIONS,
+  bookingContingencyReply,
   buildAiBookingSystemPrompt,
   dispatchAiBookingToolCall,
+  normalizeWhatsAppFormatting,
 } from "./ai-booking-tool-definitions.js";
 import { fetchGeminiGenerateContentWithFallback } from "./gemini-request-with-fallback.js";
 
 interface GeminiPart {
   text?: string;
+  thought?: boolean;
   functionCall?: {
     name: string;
     args?: Record<string, unknown>;
@@ -26,6 +29,19 @@ interface GeminiPart {
 interface GeminiContent {
   role: "user" | "model";
   parts: GeminiPart[];
+}
+
+// Seleciona a configuração de thinking de menor latência conforme a geração do modelo Gemini:
+// - Família Gemini 2.5 usa `thinkingBudget: 0` para eliminar latência extra de raciocínio.
+// - Família Gemini 3+ (ex.: gemini-3.5-flash-lite / gemini-3.5-flash) usa `thinkingLevel: "minimal"`.
+export function resolveGeminiThinkingConfig(
+  model: string,
+): { thinkingBudget: number } | { thinkingLevel: "minimal" } {
+  const normalized = model.trim().toLowerCase();
+  if (normalized.startsWith("gemini-2.5")) {
+    return { thinkingBudget: 0 };
+  }
+  return { thinkingLevel: "minimal" };
 }
 
 // Adaptador de agente de agendamento usando a API REST do Google Gemini com Function Calling nativo via fetch.
@@ -87,19 +103,20 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
             primaryModel: this.model,
             fallbackModel: this.fallbackModel,
             timeoutMs: 20_000,
-            body: {
+            body: (model) => ({
               systemInstruction: {
                 parts: [{ text: buildAiBookingSystemPrompt(input) }],
               },
               contents,
               tools: [{ functionDeclarations }],
-              // Usa thinkingLevel "minimal" no Gemini 3.5 e maxOutputTokens: 250 para respostas curtas e naturais de WhatsApp.
+              // Usa raciocínio mínimo conforme a geração do modelo e maxOutputTokens: 500 para suportar
+              // listagem de catálogo por categorias e planos de assinatura sem truncar a resposta.
               generationConfig: {
-                thinkingConfig: { thinkingLevel: "minimal" },
+                thinkingConfig: resolveGeminiThinkingConfig(model),
                 temperature: 0.4,
-                maxOutputTokens: 250,
+                maxOutputTokens: 500,
               },
-            },
+            }),
           });
 
         lastUsedModel = usedModel;
@@ -132,11 +149,9 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
           .filter((fc): fc is NonNullable<GeminiPart["functionCall"]> => Boolean(fc));
 
         if (functionCalls.length === 0) {
-          const replyText =
-            parts
-              .map((part) => part.text ?? "")
-              .join("")
-              .trim() || "Olá! Como posso ajudar com seu agendamento hoje?";
+          const replyText = normalizeWhatsAppFormatting(
+            parts.filter((part) => !part.thought).map((part) => part.text ?? "").join(""),
+          ) || bookingContingencyReply(actions);
           return {
             replyText,
             provider: "GEMINI",
@@ -178,13 +193,11 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      console.warn("[WhatsApp AI] Fallback para SIMULATED:", reason);
-      throw error;
+      console.warn("[WhatsApp AI] Falha no Gemini:", reason);
     }
 
     return {
-      replyText:
-        "Consegui verificar suas informações! Pode confirmar como prefere prosseguir com o agendamento?",
+      replyText: bookingContingencyReply(actions),
       provider: "GEMINI",
       actions,
       converted,

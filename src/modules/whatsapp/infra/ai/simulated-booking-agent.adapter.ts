@@ -103,7 +103,9 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
 
       if (appointments.length === 0) {
         return {
-          replyText: `Não encontrei agendamentos ativos para este número no momento, ${client.name}. Se quiser marcar um novo horário, é só me avisar!`,
+          replyText: client.name
+            ? `Não encontrei agendamentos ativos para este número no momento, ${client.name}. Se quiser marcar um novo horário, é só me avisar!`
+            : "Não encontrei agendamentos ativos para este número no momento. Se quiser marcar um novo horário, é só me avisar!",
           provider: "SIMULATED",
           actions,
         };
@@ -124,7 +126,7 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
             data: cancelled,
           });
           return {
-            replyText: `Tudo certo, ${client.name}! Seu agendamento de ${target.serviceName} com ${target.collaboratorName} em ${target.localDate} às ${target.localTime} foi cancelado com sucesso. Se quiser remarcar para outro dia, é só me avisar.`,
+            replyText: `${client.name ? `Tudo certo, ${client.name}!` : "Tudo certo!"} Seu agendamento de ${target.serviceName} com ${target.collaboratorName} em ${target.localDate} às ${target.localTime} foi cancelado com sucesso. Se quiser remarcar para outro dia, é só me avisar.`,
             provider: "SIMULATED",
             actions,
           };
@@ -204,7 +206,7 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
 
       if (catalog.services.length === 0) {
         return {
-          replyText: `Olá, ${client.name}! No momento ainda não há serviços ativos cadastrados em ${company.companyName}. Posso te chamar um atendente humano?`,
+          replyText: `${client.name ? `Olá, ${client.name}!` : "Olá! Tudo bem?"} No momento ainda não há serviços ativos cadastrados em ${company.companyName}. Posso te chamar um atendente humano?`,
           provider: "SIMULATED",
           actions,
         };
@@ -292,7 +294,7 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
             serviceId: matchedService.id,
             collaboratorId: chosenSlot.collaboratorId,
             startsAt: chosenSlot.startsAt,
-            clientName: client.name,
+            clientName: client.name ?? undefined,
             notes: "Agendado automaticamente via WhatsApp IA (Simulador)",
           });
 
@@ -379,7 +381,7 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
 
     // 4. Saudação ou fallback cordial
     return {
-      replyText: `Olá, ${client.name}! 👋 Sou o assistente virtual da ${company.companyName}. Posso te mostrar nossos serviços e preços, consultar horários livres ou já agendar seu atendimento. Como posso te ajudar hoje?`,
+      replyText: `${client.name ? `Olá, ${client.name}! 👋` : "Olá! Tudo bem? 👋"} Sou o assistente virtual da ${company.companyName}. Posso te mostrar nossos serviços e preços, consultar horários livres ou já agendar seu atendimento. Como posso te ajudar hoje?`,
       provider: "SIMULATED",
       actions,
     };

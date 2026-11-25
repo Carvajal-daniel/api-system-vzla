@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import Fastify from "fastify";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
+import { db } from "../../../shared/database/database.js";
 import { PlanQuotaGuardUseCase } from "../../billing/application/use-cases/plan-quota-guard.use-case.js";
 import type {
   PlanTier,
@@ -27,6 +31,7 @@ import type {
   PendingNpsAppointment,
   PostVisitNpsRepository,
 } from "../domain/repositories/post-visit-nps.repository.js";
+import type { TenantWhatsAppChannelsRepository } from "../domain/repositories/tenant-whatsapp-channels.repository.js";
 import type { WhatsAppConversationsRepository } from "../domain/repositories/whatsapp-conversations.repository.js";
 import type { WhatsAppMessagesRepository } from "../domain/repositories/whatsapp-messages.repository.js";
 import type {
@@ -45,7 +50,10 @@ import type {
   SendTextParams,
   WhatsAppGatewayPort,
 } from "../application/ports/whatsapp-gateway.port.js";
-import { WhatsAppAiTurnOrchestrator } from "../application/services/whatsapp-ai-turn-orchestrator.js";
+import {
+  DEFAULT_COMPOSING_HEARTBEAT_MS,
+  WhatsAppAiTurnOrchestrator,
+} from "../application/services/whatsapp-ai-turn-orchestrator.js";
 import { ManageWhatsAppConversationAiPauseUseCase } from "../application/use-cases/manage-whatsapp-conversation-ai-pause.use-case.js";
 import { ProcessAppointmentRemindersUseCase } from "../application/use-cases/process-appointment-reminders.use-case.js";
 import {
@@ -53,8 +61,24 @@ import {
   ProcessInboundWhatsAppMessageUseCase,
 } from "../application/use-cases/process-inbound-whatsapp-message.use-case.js";
 import { ProcessPostVisitNpsUseCase } from "../application/use-cases/process-post-visit-nps.use-case.js";
-import { buildAiBookingSystemPrompt } from "../infra/ai/ai-booking-tool-definitions.js";
-import { GeminiBookingAgentAdapter } from "../infra/ai/gemini-booking-agent.adapter.js";
+import {
+  buildAiBookingSystemPrompt,
+  dispatchAiBookingToolCall,
+  groupServicesByCategory,
+  normalizeWhatsAppFormatting,
+  resolveCustomerDisplayName,
+  sanitizeCustomerName,
+} from "../infra/ai/ai-booking-tool-definitions.js";
+import {
+  GeminiBookingAgentAdapter,
+  resolveGeminiThinkingConfig,
+} from "../infra/ai/gemini-booking-agent.adapter.js";
+import {
+  DrizzleAiBookingContextProvider,
+  summarizeCustomerVisitHistory,
+} from "../infra/ai/drizzle-ai-booking-context.provider.js";
+import { EvolutionWhatsAppAdapter } from "../infra/adapters/whatsapp/evolution-whatsapp.adapter.js";
+import { registerEvolutionChannelsWebhookRoutes } from "../infra/http/evolution-channels-webhook.routes.js";
 
 const TENANT_A = "11111111-1111-4111-8111-111111111111";
 const TENANT_B = "22222222-2222-4222-8222-222222222222";
@@ -392,7 +416,10 @@ function createClientsRepo(): ClientsRepository {
       byKey.set(`${client.companyId}:${client.phone}`, client);
       return client;
     },
-    update: async (client: Client) => client,
+    update: async (client: Client) => {
+      byKey.set(`${client.companyId}:${client.phone}`, client);
+      return client;
+    },
     listByCompany: async () => [],
   } as unknown as ClientsRepository;
 }
@@ -511,10 +538,456 @@ describe("Stage 2 — Block 1: Enriched Context, 10-message Sliding Window & Gem
     expect(prompt).toContain("Agendamentos de hoje: 18:00 (Corte com Lucas");
     expect(prompt).toContain("request_human_handoff");
     expect(prompt).toContain("ESCOPO ESTRITO");
+    expect(prompt).toContain("NÃO INVENTE REGRAS");
     expect(prompt).not.toContain("totalSpentCents");
   });
 
-  it("enforces 10-message sliding window, maxOutputTokens=250, token usage and handoff tool", async () => {
+  it("differentiates new vs recurring customers in history summary and systemPrompt with emojis and habitual weekday", () => {
+    const newSummary = summarizeCustomerVisitHistory([], "America/Sao_Paulo");
+    expect(newSummary).toEqual({
+      isNewCustomer: true,
+      totalVisits: 0,
+      mostFrequentServiceName: null,
+      preferredCollaboratorName: null,
+      lastCompletedVisit: null,
+      habitualWeekday: null,
+    });
+
+    // 2026-11-24 e 2026-11-17 são terças-feiras em America/Sao_Paulo; 2026-11-12 é quinta-feira.
+    const recurringSummary = summarizeCustomerVisitHistory(
+      [
+        {
+          serviceName: "Corte + Barba",
+          collaboratorName: "Nicolas",
+          startsAt: new Date("2026-11-24T18:00:00.000Z"),
+          status: "COMPLETED",
+        },
+        {
+          serviceName: "Corte + Barba",
+          collaboratorName: "Nicolas",
+          startsAt: new Date("2026-11-17T18:00:00.000Z"),
+          status: "COMPLETED",
+        },
+        {
+          serviceName: "Corte",
+          collaboratorName: "Lucas",
+          startsAt: new Date("2026-11-12T18:00:00.000Z"),
+          status: "CONFIRMED",
+        },
+      ],
+      "America/Sao_Paulo",
+    );
+
+    expect(recurringSummary).toEqual({
+      isNewCustomer: false,
+      totalVisits: 3,
+      mostFrequentServiceName: "Corte + Barba",
+      preferredCollaboratorName: "Nicolas",
+      lastCompletedVisit: {
+        localDate: "2026-11-24",
+        serviceName: "Corte + Barba",
+        collaboratorName: "Nicolas",
+      },
+      habitualWeekday: "às terças-feiras",
+    });
+
+    const newCustomerPrompt = buildAiBookingSystemPrompt({
+      company: {
+        companyId: TENANT_A,
+        companyName: "Barbearia Prime",
+        timezone: "America/Sao_Paulo",
+        aiSystemPrompt: null,
+        services: [
+          { id: "s1", name: "Corte + Barba", durationMinutes: 60, priceInCents: 7500 },
+          { id: "s2", name: "Corte Degradê", durationMinutes: 30, priceInCents: 4500 },
+          { id: "s3", name: "Barba Terapia", durationMinutes: 30, priceInCents: 3500 },
+          { id: "s4", name: "Sobrancelha na Navalha", durationMinutes: 15, priceInCents: 2000 },
+          { id: "s5", name: "Clube Mensal Ilimitado", durationMinutes: 30, priceInCents: 14900 },
+        ],
+        collaborators: [
+          { id: "c1", name: "Nicolas", specialty: "Barba", serviceIds: ["s1", "s2", "s3"] },
+        ],
+        customerContext: {
+          isNewCustomer: true,
+          totalVisits: 0,
+          registeredName: null,
+        },
+      },
+      client: { id: "cli-new", name: null, phone: "+5511999990099" },
+      history: [],
+      latestClientMessage: "Oi, quero conhecer os serviços",
+      now: new Date("2026-11-25T15:00:00.000Z"),
+      tools: {} as AiBookingToolExecutor,
+    });
+
+    expect(newCustomerPrompt).toContain("CLIENTE NOVO (isNewCustomer: true)");
+    expect(newCustomerPrompt).toContain('Olá! Tudo bem?');
+    expect(newCustomerPrompt).toContain("✂️, 💈, ⏰, ✅ ou 👊");
+    expect(newCustomerPrompt).toContain("PROIBIDO usar emojis de calendário");
+    expect(newCustomerPrompt).toContain("mandar bem");
+    expect(newCustomerPrompt).toContain("BLINDAGEM DE AGENDAMENTO REAL");
+    expect(newCustomerPrompt).toContain("Top 3 de 5 ativos");
+    expect(newCustomerPrompt).toContain("Corte + Barba");
+    expect(newCustomerPrompt).toContain("Corte Degradê");
+    expect(newCustomerPrompt).toContain("Barba Terapia");
+    expect(newCustomerPrompt).not.toContain("Sobrancelha na Navalha");
+    expect(newCustomerPrompt).toContain(
+      '1️⃣ *Agendar um horário* (diga o serviço, barbeiro ou "tanto faz", e o dia/hora)',
+    );
+    expect(newCustomerPrompt).toContain("2️⃣ *Ver catálogo completo de serviços*");
+    expect(newCustomerPrompt).toContain("3️⃣ *Conhecer nossos planos de assinatura* 👑");
+    expect(newCustomerPrompt).toContain("4️⃣ *Falar com um atendente*");
+    expect(newCustomerPrompt).toContain("NÃO INVENTE REGRAS");
+
+    const recurringPrompt = buildAiBookingSystemPrompt({
+      company: {
+        companyId: TENANT_A,
+        companyName: "Barbearia Prime",
+        timezone: "America/Sao_Paulo",
+        aiSystemPrompt: null,
+        services: [
+          { id: "s1", name: "Corte + Barba", durationMinutes: 60, priceInCents: 7500 },
+        ],
+        collaborators: [
+          { id: "c1", name: "Nicolas", specialty: "Barba", serviceIds: ["s1"] },
+        ],
+        customerContext: {
+          ...recurringSummary,
+          registeredName: "Rafael Costa",
+        },
+      },
+      client: { id: "cli-rec", name: "Rafael Costa", phone: "+5511999990002" },
+      history: [],
+      latestClientMessage: "Fala, tudo certo?",
+      now: new Date("2026-11-25T15:00:00.000Z"),
+      tools: {} as AiBookingToolExecutor,
+    });
+
+    expect(recurringPrompt).toContain("CLIENTE RECORRENTE (isNewCustomer: false)");
+    expect(recurringPrompt).toContain("*Rafael*");
+    expect(recurringPrompt).toContain("Serviço mais frequente: Corte + Barba");
+    expect(recurringPrompt).toContain("Profissional preferido: Nicolas (id: c1)");
+    expect(recurringPrompt).toContain("costuma cortar às terças-feiras");
+    expect(recurringPrompt).toContain(
+      "Vi no seu histórico que você costuma fazer *Corte + Barba* com o *Nicolas* (geralmente às terças-feiras).",
+    );
+    expect(recurringPrompt).toContain("PRIORIDADE DO BARBEIRO HABITUAL (*Nicolas*, id: c1)");
+    expect(recurringPrompt).toContain(
+      "1️⃣ *Agendar o de sempre* (basta dizer o dia e horário)",
+    );
+    expect(recurringPrompt).toContain("2️⃣ *Ver catálogo de serviços e planos*");
+    expect(recurringPrompt).toContain("3️⃣ *Falar com um atendente*");
+
+    // Rede de segurança do formatador remove emojis de calendário e converte **Markdown**.
+    expect(
+      normalizeWhatsAppFormatting(
+        "Confirmado para **amanhã** 📅 às **16:00** 🗓️ com o Nicolas 📆 ✅",
+      ),
+    ).toBe("Confirmado para *amanhã* às *16:00* com o Nicolas ✅");
+  });
+
+  it("resolves customer name strictly as clients -> pushName -> null, rejects test placeholders and auto-updates clients.name", async () => {
+    expect(sanitizeCustomerName("Cliente Teste")).toBeNull();
+    expect(sanitizeCustomerName("Teste")).toBeNull();
+    expect(sanitizeCustomerName("Test")).toBeNull();
+    expect(sanitizeCustomerName("Cliente Test 2")).toBeNull();
+    expect(sanitizeCustomerName("Usuário Teste")).toBeNull();
+    expect(
+      resolveCustomerDisplayName({
+        clientName: "Cliente Teste",
+        pushName: "Carvajal Daniel",
+      }),
+    ).toBe("Carvajal Daniel");
+    expect(
+      resolveCustomerDisplayName({ clientName: "Cliente", pushName: "João WhatsApp" }),
+    ).toBe("João WhatsApp");
+    expect(
+      resolveCustomerDisplayName({ clientName: "Cliente 0099", pushName: "Cliente" }),
+    ).toBeNull();
+    expect(
+      resolveCustomerDisplayName({ clientName: "Carlos Souza", pushName: "Carlinhos" }),
+    ).toBe("Carlos Souza");
+
+    const clientsRepo = createClientsRepo();
+    const conversationsRepo = new InMemoryConversationsRepo();
+    const messagesRepo = new InMemoryMessagesRepo();
+    const { gateway } = createFakeGateway();
+    const receivedContextNames: Array<string | null> = [];
+    const receivedAgentNames: Array<string | null> = [];
+
+    const baseContextProvider = createContextProvider();
+    const contextProvider: AiBookingContextProviderPort = {
+      buildContextAndTools: async (input) => {
+        receivedContextNames.push(input.clientName);
+        return baseContextProvider.buildContextAndTools(input);
+      },
+    };
+
+    const aiAgent: AiBookingAgentPort = {
+      generateReply: vi.fn(async (input: AiBookingAgentInput) => {
+        receivedAgentNames.push(input.client.name);
+        return {
+          replyText: "Olá! Tudo bem?",
+          provider: "GEMINI" as const,
+          actions: [],
+        };
+      }),
+    };
+
+    const useCase = new ProcessInboundWhatsAppMessageUseCase(
+      clientsRepo,
+      createConnectionsRepo(),
+      conversationsRepo,
+      messagesRepo,
+      aiAgent,
+      contextProvider,
+      { send: vi.fn() },
+      undefined,
+      { whatsappGateway: gateway },
+    );
+
+    // 1) Sem cadastro real e sem pushName -> null (nunca "Cliente")
+    await useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5511999991111",
+      contactName: null,
+      content: "Oi",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+    expect(receivedContextNames[0]).toBeNull();
+    expect(receivedAgentNames[0]).toBeNull();
+
+    // 2) Sem cadastro real, com pushName válido -> usa pushName
+    await useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5511999992222",
+      contactName: "Marcos Silva",
+      content: "Oi",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+    expect(receivedContextNames[1]).toBe("Marcos Silva");
+    expect(receivedAgentNames[1]).toBe("Marcos Silva");
+
+    // 3) Com nome real salvo em clients + pushName diferente -> prioriza clients
+    await clientsRepo.create(
+      Client.create({
+        companyId: TENANT_A,
+        name: "Eduardo Ferreira",
+        phone: "+5511999993333",
+      }),
+    );
+    await useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5511999993333",
+      contactName: "Dudu",
+      content: "Oi",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+    expect(receivedContextNames[2]).toBe("Eduardo Ferreira");
+    expect(receivedAgentNames[2]).toBe("Eduardo Ferreira");
+
+    // 4) Com nome placeholder ("Cliente Teste") salvo em clients + pushName real -> usa pushName e atualiza clients.name
+    await clientsRepo.create(
+      Client.create({
+        companyId: TENANT_A,
+        name: "Cliente Teste",
+        phone: "+5585921842910",
+      }),
+    );
+    await useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5585921842910",
+      contactName: "Carvajal Daniel",
+      content: "Oi",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+    expect(receivedContextNames[3]).toBe("Carvajal Daniel");
+    expect(receivedAgentNames[3]).toBe("Carvajal Daniel");
+    const updatedClient = await clientsRepo.findByPhone(TENANT_A, "+5585921842910");
+    expect(updatedClient?.name).toBe("Carvajal Daniel");
+  });
+
+  it("groups catalog services by category and returns subscription plans via tools", async () => {
+    const sampleServices = [
+      { id: "s1", name: "Corte + Barba", durationMinutes: 60, priceInCents: 7500 },
+      { id: "s2", name: "Corte Degradê", durationMinutes: 30, priceInCents: 4500 },
+      { id: "s3", name: "Barba Terapia", durationMinutes: 30, priceInCents: 3500 },
+      { id: "s4", name: "Plano Clube Mensal", durationMinutes: 30, priceInCents: 14900 },
+    ];
+    const grouped = groupServicesByCategory(sampleServices);
+    expect(grouped.map((g) => g.category)).toEqual([
+      "Combos",
+      "Cabelo",
+      "Barba",
+      "Planos & Assinaturas",
+    ]);
+
+    const actions: AiBookingAgentOutput["actions"] = [];
+    const baseTools = (
+      await createContextProvider().buildContextAndTools({
+        companyId: TENANT_A,
+        aiSystemPrompt: null,
+        clientName: null,
+        clientPhone: "+5511999990001",
+      })
+    )!.tools;
+
+    const customTools: AiBookingToolExecutor = {
+      ...baseTools,
+      listServicesAndProfessionals: async () => ({
+        services: sampleServices,
+        servicesByCategory: grouped,
+        collaborators: [
+          { id: "c1", name: "Nicolas", specialty: "Barba", serviceIds: ["s1", "s2"] },
+        ],
+        subscriptionPlans: {
+          enabled: true,
+          notes: "Clube mensal com cortes ilimitados de segunda a quarta.",
+          plans: [
+            {
+              id: "s4",
+              name: "Plano Clube Mensal",
+              description: null,
+              priceInCents: 14900,
+              durationMinutes: 30,
+            },
+          ],
+        },
+      }),
+      listSubscriptionPlans: async () => ({
+        enabled: true,
+        notes: "Clube mensal com cortes ilimitados de segunda a quarta.",
+        plans: [
+          {
+            id: "s4",
+            name: "Plano Clube Mensal",
+            description: null,
+            priceInCents: 14900,
+            durationMinutes: 30,
+          },
+        ],
+      }),
+    };
+
+    const catalogRes = await dispatchAiBookingToolCall(
+      "listar_servicos_e_profissionais",
+      {},
+      customTools,
+      actions,
+    );
+    expect((catalogRes.result as { servicesByCategory: unknown[] }).servicesByCategory).toHaveLength(4);
+
+    const plansRes = await dispatchAiBookingToolCall(
+      "consultar_planos_assinatura",
+      {},
+      customTools,
+      actions,
+    );
+    expect(plansRes.result).toMatchObject({
+      enabled: true,
+      notes: "Clube mensal com cortes ilimitados de segunda a quarta.",
+    });
+    expect(actions.map((a) => a.tool)).toEqual([
+      "listar_servicos_e_profissionais",
+      "consultar_planos_assinatura",
+    ]);
+  });
+
+  it("preserves a real booking and its Inbox metadata when Gemini times out on the final reply", async () => {
+    const date = "2026-11-26";
+    const slot = {
+      startsAt: "2026-11-26T18:00:00.000Z",
+      endsAt: "2026-11-26T18:30:00.000Z",
+      localDate: date,
+      localTime: "15:00",
+      collaboratorId: "c1",
+      collaboratorName: "Bruno",
+    };
+    const toolResponse = (name: string, args: Record<string, unknown>) =>
+      Response.json({ candidates: [{ content: { parts: [{ functionCall: { name, args } }] } }] });
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(toolResponse("consultar_horarios_livres", {
+        serviceId: "s1", collaboratorId: "c1", date,
+      }))
+      .mockResolvedValueOnce(toolResponse("criar_agendamento", {
+        serviceId: "s1", collaboratorId: "c1",
+        startsAt: slot.startsAt, localDate: date, localTime: slot.localTime,
+      }))
+      .mockRejectedValueOnce(new DOMException("Timed out", "TimeoutError"))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+
+    const context = (await createContextProvider().buildContextAndTools({
+      companyId: TENANT_A, aiSystemPrompt: null, clientName: "Ariane", clientPhone: "+5511999990001",
+    }))!;
+    const checkAvailability = vi.fn(async () => ({
+      date, timezone: context.company.timezone, serviceDurationMinutes: 30, slots: [slot],
+    }));
+    const createAppointment = vi.fn(async () => ({
+      ...slot, success: true as const, id: "appt-15", status: "CONFIRMED", serviceName: "Corte",
+    }));
+
+    const output = await new GeminiBookingAgentAdapter("fake-key").generateReply({
+      company: context.company,
+      client: { id: null, name: "Ariane", phone: "+5511999990001" },
+      history: [{
+        direction: "OUTBOUND", senderType: "AI_AGENT", sentAt: "2026-11-25T15:00:00.000Z",
+        content: "Para amanhã com o Bruno, tenho 14:00 ou 15:00 para Corte. Qual horário você prefere?",
+      }],
+      latestClientMessage: "15h",
+      now: new Date("2026-11-25T15:00:00.000Z"),
+      tools: { ...context.tools, checkAvailability, createAppointment },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(checkAvailability).toHaveBeenCalledExactlyOnceWith({
+      date, serviceId: "s1", collaboratorId: "c1",
+    });
+    expect(createAppointment).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      startsAt: slot.startsAt, localDate: date, localTime: "15:00",
+    }));
+    expect(output).toMatchObject({
+      provider: "GEMINI",
+      converted: true,
+      actions: [expect.anything(), {
+        tool: "criar_agendamento", ok: true, data: { date, appointmentId: "appt-15" },
+      }],
+    });
+    expect(output.replyText).toContain("26/11/2026* às *15:00");
+    expect(String(fetchSpy.mock.calls[0]?.[1]?.body)).toContain("última mensagem pode ser o horário 15:00");
+  });
+
+  it("asks for the time again when Gemini exhausts both retries before creating a booking", async () => {
+    const jitter = vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValueOnce(0.5);
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 429 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const context = (await createContextProvider().buildContextAndTools({
+      companyId: TENANT_A, aiSystemPrompt: null, clientName: "Ariane", clientPhone: "+5511999990001",
+    }))!;
+    const createAppointment = vi.fn(context.tools.createAppointment);
+    const output = await new GeminiBookingAgentAdapter("fake-key").generateReply({
+      company: context.company,
+      client: { id: null, name: "Ariane", phone: "+5511999990001" },
+      history: [],
+      latestClientMessage: "Pode agendar amanhã às 15h?",
+      now: new Date("2026-11-25T15:00:00.000Z"),
+      tools: { ...context.tools, createAppointment },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(jitter).toHaveBeenCalledTimes(2);
+    expect(createAppointment).not.toHaveBeenCalled();
+    expect(output).toMatchObject({ provider: "GEMINI", converted: false, actions: [] });
+    expect(output.replyText).toContain("confirmar o horário novamente");
+  });
+
+  it("enforces 10-message sliding window, maxOutputTokens=500, token usage and handoff tool", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -592,7 +1065,7 @@ describe("Stage 2 — Block 1: Enriched Context, 10-message Sliding Window & Gem
     };
     // 10 mensagens do histórico + 1 latestClientMessage = 11 itens
     expect(firstBody.contents).toHaveLength(11);
-    expect(firstBody.generationConfig.maxOutputTokens).toBe(250);
+    expect(firstBody.generationConfig.maxOutputTokens).toBe(500);
     expect(output.handoffRequested?.reason).toContain("barbeiro");
     expect(output.usage).toEqual({
       model: "gemini-3.5-flash-lite",
@@ -602,13 +1075,13 @@ describe("Stage 2 — Block 1: Enriched Context, 10-message Sliding Window & Gem
   });
 });
 
-describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (4s) & Typing Delay (5s)", () => {
-  it("groups fragmented messages with 4s debounce and sends composing -> 5s delay -> text -> paused", async () => {
+describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (1.5s) & Typing Delay (1.2s)", () => {
+  it("groups fragmented messages with 1.5s default debounce and sends composing -> 1.2s delay -> text -> paused", async () => {
     vi.useFakeTimers();
     const { gateway, events } = createFakeGateway();
     const orchestrator = new WhatsAppAiTurnOrchestrator(gateway, {
-      defaultDebounceMs: 4_000,
-      defaultTypingDelayMs: 5_000,
+      defaultDebounceMs: 1_500,
+      defaultTypingDelayMs: 1_200,
     });
 
     const flushed: string[] = [];
@@ -626,7 +1099,7 @@ describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (4s) 
       },
     });
 
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(800);
     orchestrator.scheduleTurn({
       tenantId: TENANT_A,
       conversationId: "conv-1",
@@ -641,12 +1114,12 @@ describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (4s) 
       },
     });
 
-    // Ainda dentro da janela de 4s após a segunda mensagem
-    await vi.advanceTimersByTimeAsync(3_500);
+    // Ainda dentro da janela de 1,5s após a segunda mensagem
+    await vi.advanceTimersByTimeAsync(1_200);
     expect(flushed).toHaveLength(0);
 
-    // Completa os 4s de debounce -> envia composing, mas ainda aguarda 5s para o texto
-    await vi.advanceTimersByTimeAsync(600);
+    // Completa os 1,5s de debounce -> envia composing, mas ainda aguarda 1,2s para o texto
+    await vi.advanceTimersByTimeAsync(400);
     expect(flushed).toEqual(["oi\ntem horário hoje?"]);
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({
@@ -654,8 +1127,8 @@ describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (4s) 
       payload: { tenantId: TENANT_A, to: "+5511999990001", presence: "composing" },
     });
 
-    // Completa os 5s de digitação -> envia texto e presença paused
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Completa os 1,2s de digitação -> envia texto e presença paused
+    await vi.advanceTimersByTimeAsync(1_200);
     expect(events).toHaveLength(3);
     expect(events[1]?.type).toBe("text");
     expect(events[2]).toEqual({
@@ -664,6 +1137,314 @@ describe("Stage 2 — Blocks 2 & 3: Governance, Anti-Spam, Quota, Debounce (4s) 
     });
 
     orchestrator.dispose();
+  });
+
+  it("schedules exactly one AI turn for simultaneous duplicate Evolution webhooks", async () => {
+    const { gateway } = createFakeGateway();
+    const conversations = new InMemoryConversationsRepo();
+    const messages = new InMemoryMessagesRepo();
+    const generateReply = vi.fn(async (): Promise<AiBookingAgentOutput> => ({
+      replyText: "Temos horário às 15h!", provider: "GEMINI", actions: [],
+    }));
+    const orchestrator = new WhatsAppAiTurnOrchestrator(gateway, {
+      defaultDebounceMs: 25, defaultTypingDelayMs: 0,
+    });
+    const useCase = new ProcessInboundWhatsAppMessageUseCase(
+      createClientsRepo(), createConnectionsRepo(), conversations, messages,
+      { generateReply }, createContextProvider(), { send: vi.fn() },
+      undefined, { turnOrchestrator: orchestrator },
+    );
+    const app = Fastify();
+    const channelsRepository: TenantWhatsAppChannelsRepository = {
+      findByEvolutionInstanceName: async () => ({
+        id: "channel", tenantId: TENANT_A, provider: "EVOLUTION", purpose: "ALL",
+        status: "CONNECTED", phoneNumber: null, credentials: {},
+        createdAt: new Date(), updatedAt: new Date(),
+      }),
+      findByTenantAndProvider: vi.fn(),
+      listByTenant: vi.fn(),
+      listConnectedByTenant: vi.fn(),
+      upsertChannel: vi.fn(),
+    };
+    await registerEvolutionChannelsWebhookRoutes(app, {
+      channelsRepository,
+      evolutionAdapter: new EvolutionWhatsAppAdapter(channelsRepository),
+      processInboundUseCase: useCase,
+      envProvider: () => ({ webhookSecret: "secret-duplicate-test" }),
+    });
+    try {
+      const sendWebhook = (event: string, keyId?: string, providerMessageId?: string) =>
+        app.inject({
+          method: "POST",
+          url: "/v1/whatsapp/webhooks/evolution?secret=secret-duplicate-test",
+          payload: {
+            event, instance: "evo-test",
+            data: {
+              key: { id: keyId, remoteJid: "5521987654321@lid", remoteJidAlt: "5511999990001:4@s.whatsapp.net" },
+              providerMessageId,
+              message: { conversation: "Tem horário hoje?" },
+            },
+          },
+        });
+
+      const [first, duplicate, update, missingId] = await Promise.all([
+        sendWebhook("messages.upsert", "same-key"),
+        sendWebhook("MESSAGES_UPSERT", undefined, "same-key"),
+        sendWebhook("messages.update", "same-key"),
+        sendWebhook("messages.upsert"),
+      ]);
+      expect([first, duplicate, update, missingId].map((result) => result.statusCode)).toEqual([200, 200, 200, 200]);
+      expect([first, duplicate].map((result) => result.json().duplicated).sort()).toEqual([false, true]);
+      expect(update.json().reason).toBe("EVENT_IGNORED");
+      expect(missingId.json().reason).toBe("MISSING_MESSAGE_ID");
+      await vi.waitFor(() => expect(gateway.sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ to: "+5511999990001", text: "Temos horário às 15h!" }),
+      ));
+      expect(generateReply).toHaveBeenCalledTimes(1);
+      expect(conversations.items.size).toBe(1);
+      expect([...conversations.items.values()][0]?.unreadCount).toBe(1);
+      expect(messages.messages.filter((message) => message.direction === "INBOUND")).toHaveLength(1);
+    } finally {
+      orchestrator.dispose();
+      await app.close();
+    }
+  });
+
+  it("queues the next turn for the same conversation while another client can proceed independently", async () => {
+    const { gateway } = createFakeGateway();
+    const orchestrator = new WhatsAppAiTurnOrchestrator(gateway);
+    let finishFirst!: () => void;
+    const first = new Promise<void>((resolve) => { finishFirst = resolve; });
+    const order: string[] = [];
+    const running = orchestrator.runSerially(TENANT_A, "conv-a", async () => {
+      order.push("first starts");
+      await first;
+      order.push("first finishes");
+    });
+    const queued = orchestrator.runSerially(TENANT_A, "conv-a", async () => {
+      order.push("second starts");
+    });
+    await orchestrator.runSerially(TENANT_A, "conv-b", async () => {
+      order.push("other client");
+    });
+    expect(order).toEqual(["first starts", "other client"]);
+    finishFirst();
+    await Promise.all([running, queued]);
+    expect(order).toEqual(["first starts", "other client", "first finishes", "second starts"]);
+  });
+
+  it("isolates message and appointment history for two clients arriving in the same millisecond", async () => {
+    const sentAt = new Date();
+    const ariane = { phone: "+5511999990001", digits: "5511999990001", name: "Ariane", content: "Ariane quer Corte" };
+    const daniel = { phone: "+5511999990002", digits: "5511999990002", name: "Daniel", content: "Daniel quer Barba" };
+    const customers = [ariane, daniel];
+    const dialect = new PgDialect();
+    vi.spyOn(db, "select").mockImplementation(((fields?: Record<string, unknown>) => {
+      let rows: unknown[] = [];
+      const query = {
+        from: () => query,
+        innerJoin: () => query,
+        where: (predicate: SQL) => {
+          const { sql, params } = dialect.sqlToQuery(predicate);
+          expect(params).toContain(TENANT_A);
+          if (fields?.companyName) {
+            rows = [{ id: TENANT_A, companyName: "Barbearia", timezone: "America/Sao_Paulo", isActive: true }];
+          } else if (fields?.tags || fields?.contactName || fields?.collaboratorName) {
+            expect(sql).not.toMatch(/\bor\b/i);
+            const matches = customers.filter((customer) => params.includes(customer.digits));
+            expect(matches).toHaveLength(1);
+            rows = matches.map(({ name, digits }) => ({
+              id: digits, name, tags: [], contactName: name, collaboratorName: name,
+              appointmentId: digits, serviceName: `Serviço de ${name}`,
+              startsAt: new Date(sentAt.getTime() + 60_000),
+              status: fields.appointmentId ? "CONFIRMED" : "COMPLETED",
+            }));
+          }
+          return query;
+        },
+        limit: () => query,
+        orderBy: () => query,
+        groupBy: () => query,
+        then: (resolve: (result: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
+      };
+      return query;
+    }) as unknown as typeof db.select);
+
+    const { gateway } = createFakeGateway();
+    const provider = new DrizzleAiBookingContextProvider();
+    let markBothStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { markBothStarted = resolve; });
+    let started = 0;
+    const generateReply = vi.fn(async (input: AiBookingAgentInput): Promise<AiBookingAgentOutput> => {
+      const customer = customers.find(({ phone }) => phone === input.client.phone)!;
+      if (++started === 2) markBothStarted();
+      await bothStarted;
+      expect(input.history.map(({ content }) => content)).toEqual([customer.content]);
+      expect(input.company.customerContext?.registeredName).toBe(customer.name);
+      expect(input.company.customerContext?.mostFrequentServiceName).toBe(`Serviço de ${customer.name}`);
+      const { appointments } = await input.tools.listCustomerUpcomingAppointments();
+      expect(appointments.map(({ appointmentId }) => appointmentId)).toEqual([customer.digits]);
+      return { provider: "GEMINI", replyText: `Resposta para ${customer.name}`, actions: [] };
+    });
+    const useCase = new ProcessInboundWhatsAppMessageUseCase(
+      createClientsRepo(), createConnectionsRepo(), new InMemoryConversationsRepo(),
+      new InMemoryMessagesRepo(), { generateReply }, provider, { send: vi.fn() },
+      undefined, { whatsappGateway: gateway },
+    );
+
+    await Promise.all(customers.map(({ phone, digits, content }) => useCase.execute({
+      companyId: TENANT_A, phone, content, sentAt, providerMessageId: digits, debounceMs: 0, typingDelayMs: 0,
+    })));
+    expect(gateway.sendText).toHaveBeenCalledTimes(2);
+    for (const { phone, name } of customers) {
+      expect(gateway.sendText).toHaveBeenCalledWith(expect.objectContaining({ to: phone, text: `Resposta para ${name}` }));
+    }
+  });
+
+  it("triggers composing presence before calling Gemini and selects minimal thinking config by model family", async () => {
+    expect(resolveGeminiThinkingConfig("gemini-2.5-flash")).toEqual({
+      thinkingBudget: 0,
+    });
+    expect(resolveGeminiThinkingConfig("gemini-3.5-flash-lite")).toEqual({
+      thinkingLevel: "minimal",
+    });
+
+    const conversationsRepo = new InMemoryConversationsRepo();
+    const messagesRepo = new InMemoryMessagesRepo();
+    const { gateway, events } = createFakeGateway();
+    const callOrder: string[] = [];
+
+    const originalSendPresence = gateway.sendPresence;
+    gateway.sendPresence = vi.fn(async (params: SendPresenceParams) => {
+      callOrder.push(`presence:${params.presence}`);
+      return originalSendPresence(params);
+    });
+
+    const aiAgent: AiBookingAgentPort = {
+      generateReply: vi.fn(
+        async (_input: AiBookingAgentInput): Promise<AiBookingAgentOutput> => {
+          callOrder.push("ai:generateReply");
+          return {
+            replyText: "Temos horário às 15h!",
+            provider: "GEMINI",
+            actions: [],
+            converted: false,
+            usage: { model: "gemini-3.5-flash-lite", promptTokens: 50, completionTokens: 15 },
+          };
+        },
+      ),
+    };
+
+    const useCase = new ProcessInboundWhatsAppMessageUseCase(
+      createClientsRepo(),
+      createConnectionsRepo(),
+      conversationsRepo,
+      messagesRepo,
+      aiAgent,
+      createContextProvider(),
+      { send: vi.fn() },
+      undefined,
+      { whatsappGateway: gateway },
+    );
+
+    await useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5511999990001",
+      content: "Tem horário hoje?",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+
+    expect(callOrder).toEqual([
+      "presence:composing",
+      "ai:generateReply",
+      "presence:paused",
+    ]);
+    expect(events.filter((e) => e.type === "presence")).toHaveLength(2);
+  });
+
+  it("keeps composing heartbeat alive every 3500ms during slow Gemini inference and clears interval in finally", async () => {
+    vi.useFakeTimers();
+    expect(DEFAULT_COMPOSING_HEARTBEAT_MS).toBe(3_500);
+
+    const conversationsRepo = new InMemoryConversationsRepo();
+    const messagesRepo = new InMemoryMessagesRepo();
+    const { gateway, events } = createFakeGateway();
+
+    let resolveAi!: (value: AiBookingAgentOutput) => void;
+    const aiAgent: AiBookingAgentPort = {
+      generateReply: vi.fn(
+        () =>
+          new Promise<AiBookingAgentOutput>((resolve) => {
+            resolveAi = resolve;
+          }),
+      ),
+    };
+
+    const useCase = new ProcessInboundWhatsAppMessageUseCase(
+      createClientsRepo(),
+      createConnectionsRepo(),
+      conversationsRepo,
+      messagesRepo,
+      aiAgent,
+      createContextProvider(),
+      { send: vi.fn() },
+      undefined,
+      { whatsappGateway: gateway },
+    );
+
+    const pendingExecution = useCase.execute({
+      companyId: TENANT_A,
+      phone: "+5511999990001",
+      content: "Me mostra o catálogo completo",
+      debounceMs: 0,
+      typingDelayMs: 0,
+    });
+
+    // Aguarda até o startComposingHeartbeat disparar o primeiro composing imediato
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      events.filter(
+        (e) =>
+          e.type === "presence" &&
+          (e.payload as SendPresenceParams).presence === "composing",
+      ),
+    ).toHaveLength(1);
+
+    // Simula 7.5s de inferência -> deve renovar em 3500ms e 7000ms (total 3 composing)
+    await vi.advanceTimersByTimeAsync(7_500);
+    expect(
+      events.filter(
+        (e) =>
+          e.type === "presence" &&
+          (e.payload as SendPresenceParams).presence === "composing",
+      ),
+    ).toHaveLength(3);
+
+    // Finaliza a resposta do Gemini -> bloco finally deve limpar o interval antes de enviar o texto
+    resolveAi({
+      replyText: "Aqui está o catálogo!",
+      provider: "GEMINI",
+      actions: [],
+    });
+    await pendingExecution;
+
+    const composingCountAfterReply = events.filter(
+      (e) =>
+        e.type === "presence" &&
+        (e.payload as SendPresenceParams).presence === "composing",
+    ).length;
+    expect(composingCountAfterReply).toBe(3);
+
+    // Avança mais 10s -> nenhum novo composing deve disparar após o clearInterval
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(
+      events.filter(
+        (e) =>
+          e.type === "presence" &&
+          (e.payload as SendPresenceParams).presence === "composing",
+      ),
+    ).toHaveLength(3);
   });
 
   it("enforces anti-spam (>15 msgs/h pauses AI 2h with fixed reply), quota 100% block and pause/resume isolation", async () => {

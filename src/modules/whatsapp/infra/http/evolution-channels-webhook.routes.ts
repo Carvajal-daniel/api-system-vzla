@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   getEvolutionEnv,
   isEvolutionApiConfigured,
@@ -15,7 +15,11 @@ import { WhatsAppChannelUnavailableError } from "../../domain/errors/whatsapp-er
 import type { TenantWhatsAppChannelsRepository } from "../../domain/repositories/tenant-whatsapp-channels.repository.js";
 import {
   buildTenantEvolutionInstanceName,
+  EvolutionApiConfigError,
+  EvolutionApiHttpError,
+  EvolutionApiUnreachableError,
   EvolutionWhatsAppAdapter,
+  isEvolutionNetworkError,
   mapEvolutionConnectionState,
 } from "../adapters/whatsapp/evolution-whatsapp.adapter.js";
 import { maskChannelCredentials } from "../adapters/whatsapp/whatsapp-gateway.router.js";
@@ -42,6 +46,8 @@ export interface EvolutionWebhookEventPayload {
       remoteJidAlt?: string;
     };
     pushName?: string;
+    providerMessageId?: string;
+    messageId?: string;
     messageTimestamp?: number | string;
     message?: {
       conversation?: string;
@@ -100,15 +106,18 @@ function isGroupOrBroadcastJid(jid?: string): boolean {
   return jid.includes("@g.us") || jid.includes("status@broadcast");
 }
 
-function extractCleanPhoneFromJid(jid?: string): string | null {
-  if (!jid || isGroupOrBroadcastJid(jid)) {
-    return null;
+export function extractCleanPhoneFromJid(jid?: string): string | null {
+  // LIDs são identificadores opacos. Use remoteJidAlt quando ele trouxer o telefone real.
+  const digits = typeof jid === "string"
+    ? /^\+?([1-9]\d{9,14})(?::\d+)?(?:@(?:s\.whatsapp\.net|c\.us))?$/i.exec(jid.trim())?.[1]
+    : undefined;
+  return digits ? `+${digits}` : null;
+}
+
+export function readEvolutionMessageId(data: EvolutionWebhookEventPayload["data"]): string | undefined {
+  for (const value of [data?.key?.id, data?.providerMessageId, data?.messageId]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
   }
-  const digits = jid.replace(/@.*$/, "").replace(/\D/g, "");
-  if (digits.length < 10 || digits.length > 15) {
-    return null;
-  }
-  return `+${digits}`;
 }
 
 function extractInboundMessageText(
@@ -126,6 +135,68 @@ function extractInboundMessageText(
 
   const trimmed = raw?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+const EVOLUTION_UNREACHABLE_MESSAGE =
+  "Servidor Evolution API inacessível. Verifique se o container Docker está rodando.";
+
+const errorResponseSchema = {
+  type: "object",
+  properties: {
+    message: { type: "string" },
+  },
+};
+
+// Traduz erros de configuração, rede (ECONNREFUSED/timeout) e HTTP da Evolution API em respostas 400/502 claras.
+function handleEvolutionAdapterError(
+  error: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  if (error instanceof EvolutionApiConfigError) {
+    request.log.warn(
+      { err: error },
+      "Evolution API configuration is missing or incomplete",
+    );
+    return reply.status(400).send({
+      message: error.message,
+    });
+  }
+
+  if (
+    error instanceof EvolutionApiUnreachableError ||
+    isEvolutionNetworkError(error)
+  ) {
+    request.log.error(
+      { err: error },
+      "Evolution API server is unreachable (network/connection failure)",
+    );
+    return reply.status(502).send({
+      message: EVOLUTION_UNREACHABLE_MESSAGE,
+    });
+  }
+
+  if (error instanceof EvolutionApiHttpError) {
+    request.log.error(
+      { err: error, statusCode: error.statusCode, detail: error.detail },
+      "Evolution API returned an unexpected HTTP error",
+    );
+    return reply.status(502).send({
+      message: error.message,
+    });
+  }
+
+  if (error instanceof WhatsAppChannelUnavailableError) {
+    request.log.error(
+      { err: error },
+      "Evolution WhatsApp channel unavailable",
+    );
+    return reply.status(502).send({
+      message: error.message,
+    });
+  }
+
+  throw error;
 }
 
 // Registra os endpoints autenticados de gestão de canais Evolution (QR Code / status / logout)
@@ -161,10 +232,12 @@ export async function registerEvolutionChannelsWebhookRoutes(
               mode: { type: "string", enum: ["LIVE", "MOCK_READY"] },
             },
           },
+          400: errorResponseSchema,
+          502: errorResponseSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const tenantId = request.actor!.companyId;
       const existing = await deps.channelsRepository.findByTenantAndProvider(
         tenantId,
@@ -179,9 +252,10 @@ export async function registerEvolutionChannelsWebhookRoutes(
 
       if (!isConfigured()) {
         if (isProduction()) {
-          throw new WhatsAppChannelUnavailableError(
-            "Evolution API não configurada no ambiente de produção.",
-          );
+          return reply.status(400).send({
+            message:
+              "Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY).",
+          });
         }
 
         await deps.channelsRepository.upsertChannel({
@@ -202,28 +276,33 @@ export async function registerEvolutionChannelsWebhookRoutes(
         };
       }
 
-      const result = await deps.evolutionAdapter.connectInstance(
-        tenantId,
-        instanceName,
-      );
+      try {
+        const result = await deps.evolutionAdapter.connectInstance(
+          tenantId,
+          instanceName,
+          request.log,
+        );
 
-      await deps.channelsRepository.upsertChannel({
-        tenantId,
-        provider: "EVOLUTION",
-        purpose: existing?.purpose ?? "ALL",
-        status: result.status,
-        phoneNumber: result.phoneNumber ?? existing?.phoneNumber ?? null,
-        credentials: { instanceName: result.instanceName },
-      });
+        await deps.channelsRepository.upsertChannel({
+          tenantId,
+          provider: "EVOLUTION",
+          purpose: existing?.purpose ?? "ALL",
+          status: result.status,
+          phoneNumber: result.phoneNumber ?? existing?.phoneNumber ?? null,
+          credentials: { instanceName: result.instanceName },
+        });
 
-      return {
-        instanceName: result.instanceName,
-        qrCodeBase64: result.qrCodeBase64,
-        pairingCode: result.pairingCode,
-        status: result.status,
-        phoneNumber: result.phoneNumber,
-        mode: "LIVE" as const,
-      };
+        return {
+          instanceName: result.instanceName,
+          qrCodeBase64: result.qrCodeBase64,
+          pairingCode: result.pairingCode,
+          status: result.status,
+          phoneNumber: result.phoneNumber,
+          mode: "LIVE" as const,
+        };
+      } catch (error) {
+        return handleEvolutionAdapterError(error, request, reply);
+      }
     },
   );
 
@@ -307,10 +386,12 @@ export async function registerEvolutionChannelsWebhookRoutes(
               status: { type: "string", enum: ["DISCONNECTED"] },
             },
           },
+          400: errorResponseSchema,
+          502: errorResponseSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const tenantId = request.actor!.companyId;
       const existing = await deps.channelsRepository.findByTenantAndProvider(
         tenantId,
@@ -322,7 +403,11 @@ export async function registerEvolutionChannelsWebhookRoutes(
           : buildTenantEvolutionInstanceName(tenantId);
 
       if (isConfigured()) {
-        await deps.evolutionAdapter.disconnectInstance(instanceName);
+        try {
+          await deps.evolutionAdapter.disconnectInstance(instanceName);
+        } catch (error) {
+          return handleEvolutionAdapterError(error, request, reply);
+        }
       }
 
       await deps.channelsRepository.upsertChannel({
@@ -458,6 +543,11 @@ export async function registerEvolutionChannelsWebhookRoutes(
           .send({ ignored: true, reason: "UNSUPPORTED_MESSAGE" });
       }
 
+      const externalMessageId = readEvolutionMessageId(payload.data);
+      if (!externalMessageId) {
+        return reply.status(200).send({ ignored: true, reason: "MISSING_MESSAGE_ID" });
+      }
+
       const timestampRaw = payload.data?.messageTimestamp;
       const timestampSeconds =
         typeof timestampRaw === "number"
@@ -474,7 +564,7 @@ export async function registerEvolutionChannelsWebhookRoutes(
         phone,
         contactName: payload.data?.pushName ?? null,
         content: text,
-        externalMessageId: payload.data?.key?.id ?? null,
+        externalMessageId,
         sentAt,
         source: "WEBHOOK",
       });

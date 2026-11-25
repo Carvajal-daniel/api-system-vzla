@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { ActorContext } from "../../../../shared/auth/actor-context.js";
 import { db } from "../../../../shared/database/database.js";
+import { Phone } from "../../../../shared/value-objects/phone.value-object.js";
 import { CreateAppointmentUseCase } from "../../../appointments/application/use-cases/create-appointment.use-case.js";
 import { GetAvailabilityUseCase } from "../../../appointments/application/use-cases/get-availability.use-case.js";
 import { RescheduleAppointmentUseCase } from "../../../appointments/application/use-cases/reschedule-appointment.use-case.js";
@@ -15,6 +16,7 @@ import { DrizzleScheduleBlocksRepository } from "../../../appointments/infra/dat
 import { DrizzleSchedulingContextLookupRepository } from "../../../appointments/infra/database/repositories/drizzle-scheduling-context-lookup.repository.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
 import { ClientTable } from "../../../clients/infra/database/schema/clients-schema.js";
+import { WhatsAppConversationsTable } from "../database/schema/whatsapp-conversations-schema.js";
 import { CollaboratorTable } from "../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { CompanyTable } from "../../../Company/infra/database/schema/companies-schema.js";
 import { CompanySettingsTable } from "../../../Company/infra/database/schema/company-settings-schema.js";
@@ -26,23 +28,139 @@ import type {
   AiBookingCustomerAppointment,
   AiBookingCustomerContext,
   AiBookingOperationalRules,
+  AiBookingServiceCategoryGroup,
   AiBookingServiceSummary,
+  AiBookingSubscriptionPlansResult,
   AiBookingToolExecutor,
 } from "../../application/ports/ai-booking-agent.port.js";
 import type { AiBookingContextProviderPort } from "../../application/ports/ai-booking-context-provider.port.js";
+import {
+  groupServicesByCategory,
+  inferServiceCategory,
+  isSubscriptionPlanService,
+  resolveCustomerDisplayName,
+  sanitizeCustomerName,
+} from "./ai-booking-tool-definitions.js";
 
-// Normaliza dígitos do telefone e gera variantes com/sem DDI 55 para casar com client_phone e clients.phone.
-function buildNormalizedPhoneDigitVariants(rawPhone: string): string[] {
-  const digits = rawPhone.replace(/\D/g, "");
-  if (!digits) return [];
-
-  const variants = new Set<string>([digits]);
-  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
-    variants.add(digits.slice(2));
-  } else if (!digits.startsWith("55") && (digits.length === 10 || digits.length === 11)) {
-    variants.add(`55${digits}`);
+function normalizeCustomerPhone(rawPhone: string): string | null {
+  try {
+    return Phone.create(rawPhone).value.replace(/^\+/, "");
+  } catch {
+    return null;
   }
-  return Array.from(variants);
+}
+
+const HABITUAL_WEEKDAY_LABELS: Record<number, string> = {
+  0: "aos domingos",
+  1: "às segundas-feiras",
+  2: "às terças-feiras",
+  3: "às quartas-feiras",
+  4: "às quintas-feiras",
+  5: "às sextas-feiras",
+  6: "aos sábados",
+};
+
+export interface CustomerVisitHistoryRow {
+  serviceName: string;
+  collaboratorName: string;
+  startsAt: Date;
+  status: string;
+}
+
+export interface CustomerVisitHistorySummary {
+  isNewCustomer: boolean;
+  totalVisits: number;
+  mostFrequentServiceName: string | null;
+  preferredCollaboratorName: string | null;
+  lastCompletedVisit: {
+    localDate: string;
+    serviceName: string;
+    collaboratorName: string;
+  } | null;
+  habitualWeekday: string | null;
+}
+
+// Resume o histórico de atendimentos concluídos/agendados do cliente para diferenciar clientes novos
+// de recorrentes e detectar serviço mais frequente, profissional preferido e dia habitual (2+ visitas).
+export function summarizeCustomerVisitHistory(
+  rows: CustomerVisitHistoryRow[],
+  timezone: string,
+): CustomerVisitHistorySummary {
+  if (rows.length === 0) {
+    return {
+      isNewCustomer: true,
+      totalVisits: 0,
+      mostFrequentServiceName: null,
+      preferredCollaboratorName: null,
+      lastCompletedVisit: null,
+      habitualWeekday: null,
+    };
+  }
+
+  // Como a consulta vem ordenada do mais recente para o mais antigo, empates preservam o atendimento mais recente.
+  const serviceFreq = new Map<string, number>();
+  const collaboratorFreq = new Map<string, number>();
+  const weekdayFreq = new Map<number, number>();
+
+  for (const row of rows) {
+    serviceFreq.set(row.serviceName, (serviceFreq.get(row.serviceName) ?? 0) + 1);
+    collaboratorFreq.set(
+      row.collaboratorName,
+      (collaboratorFreq.get(row.collaboratorName) ?? 0) + 1,
+    );
+    const localParts = getLocalDateTimeParts(row.startsAt, timezone);
+    weekdayFreq.set(
+      localParts.dayOfWeek,
+      (weekdayFreq.get(localParts.dayOfWeek) ?? 0) + 1,
+    );
+  }
+
+  let mostFrequentServiceName: string | null = null;
+  let bestServiceCount = 0;
+  for (const [serviceName, count] of serviceFreq.entries()) {
+    if (count > bestServiceCount) {
+      bestServiceCount = count;
+      mostFrequentServiceName = serviceName;
+    }
+  }
+
+  let preferredCollaboratorName: string | null = null;
+  let bestCollaboratorCount = 0;
+  for (const [collaboratorName, count] of collaboratorFreq.entries()) {
+    if (count > bestCollaboratorCount) {
+      bestCollaboratorCount = count;
+      preferredCollaboratorName = collaboratorName;
+    }
+  }
+
+  let habitualWeekday: string | null = null;
+  // Exige repetição de 2 ou mais atendimentos no mesmo dia da semana para apontar hábito.
+  let bestWeekdayCount = 1;
+  for (const [dayOfWeek, count] of weekdayFreq.entries()) {
+    if (count > bestWeekdayCount) {
+      bestWeekdayCount = count;
+      habitualWeekday = HABITUAL_WEEKDAY_LABELS[dayOfWeek] ?? null;
+    }
+  }
+
+  const latestVisit =
+    rows.find((row) => row.status === "COMPLETED") ?? rows[0] ?? null;
+
+  return {
+    isNewCustomer: false,
+    totalVisits: rows.length,
+    mostFrequentServiceName,
+    preferredCollaboratorName,
+    lastCompletedVisit: latestVisit
+      ? {
+          localDate: getLocalDateTimeParts(latestVisit.startsAt, timezone)
+            .dateString,
+          serviceName: latestVisit.serviceName,
+          collaboratorName: latestVisit.collaboratorName,
+        }
+      : null,
+    habitualWeekday,
+  };
 }
 
 // Provedor de contexto da empresa e adaptador de ferramentas que conecta o agente de IA
@@ -77,44 +195,68 @@ export class DrizzleAiBookingContextProvider
 
   private async loadCatalog(companyId: string): Promise<{
     services: AiBookingServiceSummary[];
+    servicesByCategory: AiBookingServiceCategoryGroup[];
     collaborators: AiBookingCollaboratorSummary[];
+    subscriptionPlans: AiBookingSubscriptionPlansResult;
   }> {
-    const [servicesRows, collaboratorsRows, linksRows] = await Promise.all([
-      db
-        .select({
-          id: ServiceTable.id,
-          name: ServiceTable.name,
-          durationMinutes: ServiceTable.durationMinutes,
-          priceInCents: ServiceTable.priceInCents,
-        })
-        .from(ServiceTable)
-        .where(
-          and(
-            eq(ServiceTable.companyId, companyId),
-            eq(ServiceTable.active, true),
+    const [servicesRows, collaboratorsRows, linksRows, popularityRows, settingsRows] =
+      await Promise.all([
+        db
+          .select({
+            id: ServiceTable.id,
+            name: ServiceTable.name,
+            description: ServiceTable.description,
+            durationMinutes: ServiceTable.durationMinutes,
+            priceInCents: ServiceTable.priceInCents,
+          })
+          .from(ServiceTable)
+          .where(
+            and(
+              eq(ServiceTable.companyId, companyId),
+              eq(ServiceTable.active, true),
+            ),
+          )
+          .orderBy(asc(ServiceTable.name)),
+        db
+          .select({
+            id: CollaboratorTable.id,
+            name: CollaboratorTable.name,
+            specialty: CollaboratorTable.specialty,
+          })
+          .from(CollaboratorTable)
+          .where(
+            and(
+              eq(CollaboratorTable.companyId, companyId),
+              eq(CollaboratorTable.isActive, true),
+            ),
           ),
-        ),
-      db
-        .select({
-          id: CollaboratorTable.id,
-          name: CollaboratorTable.name,
-          specialty: CollaboratorTable.specialty,
-        })
-        .from(CollaboratorTable)
-        .where(
-          and(
-            eq(CollaboratorTable.companyId, companyId),
-            eq(CollaboratorTable.isActive, true),
-          ),
-        ),
-      db
-        .select({
-          collaboratorId: CollaboratorServiceTable.collaboratorId,
-          serviceId: CollaboratorServiceTable.serviceId,
-        })
-        .from(CollaboratorServiceTable)
-        .where(eq(CollaboratorServiceTable.companyId, companyId)),
-    ]);
+        db
+          .select({
+            collaboratorId: CollaboratorServiceTable.collaboratorId,
+            serviceId: CollaboratorServiceTable.serviceId,
+          })
+          .from(CollaboratorServiceTable)
+          .where(eq(CollaboratorServiceTable.companyId, companyId)),
+        // Ordena o catálogo priorizando os serviços mais agendados da empresa para compor o Top 3.
+        db
+          .select({
+            serviceId: AppointmentTable.serviceId,
+            totalBookings: sql<number>`count(*)::int`,
+          })
+          .from(AppointmentTable)
+          .where(
+            and(
+              eq(AppointmentTable.companyId, companyId),
+              inArray(AppointmentTable.status, ["COMPLETED", "CONFIRMED", "PENDING"]),
+            ),
+          )
+          .groupBy(AppointmentTable.serviceId),
+        db
+          .select({ preferences: CompanySettingsTable.preferences })
+          .from(CompanySettingsTable)
+          .where(eq(CompanySettingsTable.companyId, companyId))
+          .limit(1),
+      ]);
 
     const serviceIdsByCollaborator = new Map<string, string[]>();
     for (const link of linksRows) {
@@ -123,19 +265,59 @@ export class DrizzleAiBookingContextProvider
       serviceIdsByCollaborator.set(link.collaboratorId, list);
     }
 
-    return {
-      services: servicesRows.map((s) => ({
+    const bookingCountByServiceId = new Map<string, number>();
+    for (const row of popularityRows) {
+      if (row.serviceId) {
+        bookingCountByServiceId.set(row.serviceId, Number(row.totalBookings ?? 0));
+      }
+    }
+
+    const services: AiBookingServiceSummary[] = servicesRows
+      .map((s) => ({
         id: s.id,
         name: s.name,
+        description: s.description ?? null,
+        category: inferServiceCategory({
+          name: s.name,
+          description: s.description,
+        }),
         durationMinutes: s.durationMinutes,
         priceInCents: s.priceInCents,
+      }))
+      .sort((a, b) => {
+        const countDiff =
+          (bookingCountByServiceId.get(b.id) ?? 0) -
+          (bookingCountByServiceId.get(a.id) ?? 0);
+        if (countDiff !== 0) return countDiff;
+        return a.name.localeCompare(b.name, "pt-BR");
+      });
+
+    const packageSales = settingsRows[0]?.preferences?.packageSales ?? null;
+    const planServices = services.filter((s) => isSubscriptionPlanService(s));
+    const subscriptionPlans: AiBookingSubscriptionPlansResult = {
+      enabled: Boolean(packageSales?.enabled) || planServices.length > 0,
+      notes: packageSales?.enabled
+        ? packageSales.notes?.trim() || null
+        : null,
+      plans: planServices.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description ?? null,
+        priceInCents: s.priceInCents,
+        durationMinutes: s.durationMinutes,
       })),
+    };
+
+    return {
+      services,
+      servicesByCategory: groupServicesByCategory(services),
       collaborators: collaboratorsRows.map((c) => ({
         id: c.id,
         name: c.name,
         specialty: c.specialty || null,
         serviceIds: serviceIdsByCollaborator.get(c.id) ?? [],
       })),
+      subscriptionPlans,
     };
   }
 
@@ -209,87 +391,134 @@ export class DrizzleAiBookingContextProvider
   }
 
   // Carrega o perfil operacional e histórico do cliente (sem valores gastos ou dados financeiros internos),
-  // isolado estritamente por companyId e telefone normalizado.
+  // Isola o histórico por companyId e pelo telefone completo do remetente.
   private async loadCustomerContext(params: {
     companyId: string;
+    pushName?: string | null | undefined;
     customerPhone: string;
     timezone: string;
     now: Date;
   }): Promise<AiBookingCustomerContext> {
-    const phoneVariants = buildNormalizedPhoneDigitVariants(params.customerPhone);
-    if (phoneVariants.length === 0) {
-      return { registeredName: null };
+    const phone = normalizeCustomerPhone(params.customerPhone);
+    if (!phone) {
+      return {
+        isNewCustomer: true,
+        totalVisits: 0,
+        registeredName: sanitizeCustomerName(params.pushName),
+      };
     }
 
-    const phoneMatcher = inArray(
-      sql`regexp_replace(${AppointmentTable.clientPhone}, '\\D', '', 'g')`,
-      phoneVariants,
+    const phoneMatcher = eq(
+      sql`regexp_replace(${AppointmentTable.clientPhone}, '[^0-9]', '', 'g')`,
+      phone,
     );
-    const clientPhoneMatcher = inArray(
-      sql`regexp_replace(${ClientTable.phone}, '\\D', '', 'g')`,
-      phoneVariants,
+    const clientPhoneMatcher = eq(
+      sql`regexp_replace(${ClientTable.phone}, '[^0-9]', '', 'g')`,
+      phone,
+    );
+    const conversationPhoneMatcher = eq(
+      sql`regexp_replace(${WhatsAppConversationsTable.phone}, '[^0-9]', '', 'g')`,
+      phone,
     );
 
-    const [clientRows, completedRows, upcomingResult] = await Promise.all([
-      db
-        .select({
-          name: ClientTable.name,
-          tags: ClientTable.tags,
-        })
-        .from(ClientTable)
-        .where(
-          and(eq(ClientTable.companyId, params.companyId), clientPhoneMatcher),
-        )
-        .limit(1),
-      db
-        .select({
-          serviceName: AppointmentTable.serviceNameSnapshot,
-          collaboratorName: CollaboratorTable.name,
-          startsAt: AppointmentTable.startsAt,
-        })
-        .from(AppointmentTable)
-        .innerJoin(
-          CollaboratorTable,
-          and(
-            eq(AppointmentTable.collaboratorId, CollaboratorTable.id),
-            eq(AppointmentTable.companyId, CollaboratorTable.companyId),
-          ),
-        )
-        .where(
-          and(
-            eq(AppointmentTable.companyId, params.companyId),
-            eq(AppointmentTable.status, "COMPLETED"),
-            phoneMatcher,
-          ),
-        )
-        .orderBy(desc(AppointmentTable.startsAt))
-        .limit(20),
-      this.listCustomerUpcomingAppointments({
-        companyId: params.companyId,
-        customerPhone: params.customerPhone,
-        timezone: params.timezone,
-        // Retrocede 2h para incluir agendamentos de hoje em caso de atraso do cliente.
-        now: new Date(params.now.getTime() - 2 * 60 * 60 * 1000),
-      }),
-    ]);
+    const [clientRows, conversationRows, historyRows, upcomingResult] =
+      await Promise.all([
+        db
+          .select({
+            id: ClientTable.id,
+            name: ClientTable.name,
+            tags: ClientTable.tags,
+          })
+          .from(ClientTable)
+          .where(
+            and(eq(ClientTable.companyId, params.companyId), clientPhoneMatcher),
+          )
+          .limit(10),
+        db
+          .select({
+            contactName: WhatsAppConversationsTable.contactName,
+          })
+          .from(WhatsAppConversationsTable)
+          .where(
+            and(
+              eq(WhatsAppConversationsTable.companyId, params.companyId),
+              conversationPhoneMatcher,
+            ),
+          )
+          .limit(5),
+        db
+          .select({
+            serviceName: AppointmentTable.serviceNameSnapshot,
+            collaboratorName: CollaboratorTable.name,
+            startsAt: AppointmentTable.startsAt,
+            status: AppointmentTable.status,
+          })
+          .from(AppointmentTable)
+          .innerJoin(
+            CollaboratorTable,
+            and(
+              eq(AppointmentTable.collaboratorId, CollaboratorTable.id),
+              eq(AppointmentTable.companyId, CollaboratorTable.companyId),
+            ),
+          )
+          .where(
+            and(
+              eq(AppointmentTable.companyId, params.companyId),
+              inArray(AppointmentTable.status, ["COMPLETED", "CONFIRMED", "PENDING"]),
+              phoneMatcher,
+            ),
+          )
+          .orderBy(desc(AppointmentTable.startsAt))
+          .limit(30),
+        this.listCustomerUpcomingAppointments({
+          companyId: params.companyId,
+          customerPhone: params.customerPhone,
+          timezone: params.timezone,
+          // Retrocede 2h para incluir agendamentos de hoje em caso de atraso do cliente.
+          now: new Date(params.now.getTime() - 2 * 60 * 60 * 1000),
+        }),
+      ]);
 
-    const clientRow = clientRows[0] ?? null;
-    const lastCompleted = completedRows[0] ?? null;
+    const validClientName =
+      clientRows
+        .map((row) => sanitizeCustomerName(row.name))
+        .find((name): name is string => Boolean(name)) ??
+      null;
+    const realWhatsAppName =
+      sanitizeCustomerName(params.pushName) ??
+      conversationRows
+        .map((row) => sanitizeCustomerName(row.contactName))
+        .find((name): name is string => Boolean(name)) ??
+      null;
+    const effectiveName = validClientName ?? realWhatsAppName ?? null;
 
-    let preferredCollaboratorName: string | null = null;
-    if (completedRows.length > 0) {
-      const freq = new Map<string, number>();
-      for (const row of completedRows) {
-        freq.set(row.collaboratorName, (freq.get(row.collaboratorName) ?? 0) + 1);
-      }
-      let bestCount = 0;
-      for (const [name, count] of freq.entries()) {
-        if (count > bestCount) {
-          bestCount = count;
-          preferredCollaboratorName = name;
-        }
+    // Atualiza automaticamente registros de `clients` com nome placeholder (ex.: "Cliente Teste", "Cliente")
+    // assim que um nome real do WhatsApp estiver disponível, evitando recorrência do bug.
+    const placeholderClientIds = clientRows
+      .filter((row) => !sanitizeCustomerName(row.name))
+      .map((row) => row.id);
+    if (placeholderClientIds.length > 0 && (realWhatsAppName ?? validClientName)) {
+      const replacementName = (realWhatsAppName ?? validClientName)!;
+      try {
+        await db
+          .update(ClientTable)
+          .set({ name: replacementName, updatedAt: new Date() })
+          .where(
+            and(
+              eq(ClientTable.companyId, params.companyId),
+              clientPhoneMatcher,
+              inArray(ClientTable.id, placeholderClientIds),
+            ),
+          );
+      } catch {
+        // Correção oportunista de placeholder não deve impedir a resposta ao cliente.
       }
     }
+
+    const historySummary = summarizeCustomerVisitHistory(
+      historyRows,
+      params.timezone,
+    );
 
     const todayLocalDate = getLocalDateTimeParts(
       params.now,
@@ -299,23 +528,25 @@ export class DrizzleAiBookingContextProvider
       (appt) => appt.localDate === todayLocalDate,
     );
 
-    const activePackagesOrTags = (clientRow?.tags ?? []).filter(
-      (tag) => tag.trim().length > 0 && tag.toLowerCase() !== "whatsapp",
-    );
+    const tagSet = new Set<string>();
+    for (const row of clientRows) {
+      for (const tag of row.tags ?? []) {
+        const cleaned = tag.trim();
+        if (cleaned.length > 0 && cleaned.toLowerCase() !== "whatsapp") {
+          tagSet.add(cleaned);
+        }
+      }
+    }
+    const activePackagesOrTags = Array.from(tagSet);
 
     return {
-      registeredName: clientRow?.name ?? null,
-      lastCompletedVisit: lastCompleted
-        ? {
-            localDate: getLocalDateTimeParts(
-              lastCompleted.startsAt,
-              params.timezone,
-            ).dateString,
-            serviceName: lastCompleted.serviceName,
-            collaboratorName: lastCompleted.collaboratorName,
-          }
-        : null,
-      preferredCollaboratorName,
+      isNewCustomer: historySummary.isNewCustomer,
+      totalVisits: historySummary.totalVisits,
+      registeredName: effectiveName,
+      mostFrequentServiceName: historySummary.mostFrequentServiceName,
+      lastCompletedVisit: historySummary.lastCompletedVisit,
+      preferredCollaboratorName: historySummary.preferredCollaboratorName,
+      habitualWeekday: historySummary.habitualWeekday,
       activePackagesOrTags,
       todayAppointments,
     };
@@ -328,8 +559,8 @@ export class DrizzleAiBookingContextProvider
     now?: Date | undefined;
     timezone?: string | undefined;
   }): Promise<{ appointments: AiBookingCustomerAppointment[] }> {
-    const phoneVariants = buildNormalizedPhoneDigitVariants(input.customerPhone);
-    if (phoneVariants.length === 0) {
+    const phone = normalizeCustomerPhone(input.customerPhone);
+    if (!phone) {
       return { appointments: [] };
     }
 
@@ -368,9 +599,9 @@ export class DrizzleAiBookingContextProvider
           eq(AppointmentTable.companyId, input.companyId),
           inArray(AppointmentTable.status, ["PENDING", "CONFIRMED"]),
           gte(AppointmentTable.startsAt, referenceNow),
-          inArray(
-            sql`regexp_replace(${AppointmentTable.clientPhone}, '\\D', '', 'g')`,
-            phoneVariants,
+          eq(
+            sql`regexp_replace(${AppointmentTable.clientPhone}, '[^0-9]', '', 'g')`,
+            phone,
           ),
         ),
       )
@@ -394,12 +625,12 @@ export class DrizzleAiBookingContextProvider
     };
   }
 
-  async buildContextAndTools(input: {
-    companyId: string;
-    aiSystemPrompt: string | null;
-    clientName: string;
-    clientPhone: string;
-  }): Promise<{
+  async buildContextAndTools({
+    companyId,
+    aiSystemPrompt,
+    clientName,
+    clientPhone,
+  }: Parameters<AiBookingContextProviderPort["buildContextAndTools"]>[0]): Promise<{
     company: AiBookingCompanyContext;
     tools: AiBookingToolExecutor;
   } | null> {
@@ -411,7 +642,7 @@ export class DrizzleAiBookingContextProvider
         isActive: CompanyTable.isActive,
       })
       .from(CompanyTable)
-      .where(eq(CompanyTable.id, input.companyId))
+      .where(eq(CompanyTable.id, companyId))
       .limit(1);
 
     if (!companyRow || !companyRow.isActive) {
@@ -420,19 +651,28 @@ export class DrizzleAiBookingContextProvider
 
     const now = new Date();
     const [catalog, operationalRules, customerContext] = await Promise.all([
-      this.loadCatalog(input.companyId),
-      this.loadOperationalRules(input.companyId),
+      this.loadCatalog(companyId),
+      this.loadOperationalRules(companyId),
       this.loadCustomerContext({
-        companyId: input.companyId,
-        customerPhone: input.clientPhone,
+        companyId,
+        pushName: clientName,
+        customerPhone: clientPhone,
         timezone: companyRow.timezone,
         now,
       }),
     ]);
 
+    const customerPhone = normalizeCustomerPhone(clientPhone);
+    const requireCustomerAppointment = async (appointmentId: string) => {
+      const appointment = await this.appointmentsRepository.findById(companyId, appointmentId);
+      if (!customerPhone || !appointment || normalizeCustomerPhone(appointment.clientPhone) !== customerPhone) {
+        throw new Error("Agendamento não encontrado para este número de WhatsApp.");
+      }
+    };
+
     const aiActor: ActorContext = {
-      userId: input.companyId,
-      companyId: input.companyId,
+      userId: companyId,
+      companyId,
       role: "OWNER",
     };
 
@@ -470,13 +710,28 @@ export class DrizzleAiBookingContextProvider
       return parsed;
     };
 
+    // Resolve o nome real do cliente estritamente na ordem: clients -> pushName -> null.
+    const resolvedCustomerName = resolveCustomerDisplayName({
+      clientName: customerContext.registeredName,
+      pushName: clientName,
+    });
+    const normalizedCustomerContext: AiBookingCustomerContext = {
+      ...customerContext,
+      registeredName: resolvedCustomerName,
+    };
+
     const tools: AiBookingToolExecutor = {
-      listServicesAndProfessionals: async () => this.loadCatalog(input.companyId),
+      listServicesAndProfessionals: async () => this.loadCatalog(companyId),
+
+      listSubscriptionPlans: async () => {
+        const freshCatalog = await this.loadCatalog(companyId);
+        return freshCatalog.subscriptionPlans;
+      },
 
       checkAvailability: async ({ serviceId, date, collaboratorId }) => {
         const normalizedCollaboratorId = collaboratorId?.trim() || undefined;
         const result = await this.getAvailabilityUseCase.execute({
-          companyId: input.companyId,
+          companyId,
           serviceId,
           date,
           collaboratorId: normalizedCollaboratorId,
@@ -498,8 +753,8 @@ export class DrizzleAiBookingContextProvider
       // Sempre vincula a busca ao telefone autenticado da conversa atual para evitar acesso a dados de terceiros.
       listCustomerUpcomingAppointments: async () =>
         this.listCustomerUpcomingAppointments({
-          companyId: input.companyId,
-          customerPhone: input.clientPhone,
+          companyId,
+          customerPhone: clientPhone,
           timezone: companyRow.timezone,
         }),
 
@@ -533,7 +788,7 @@ export class DrizzleAiBookingContextProvider
         // (profissional + serviço + data/hora local) está realmente livre antes de tentar gravar no banco.
         const loadAvailableSlots = async () => {
           const availability = await this.getAvailabilityUseCase.execute({
-            companyId: input.companyId,
+            companyId,
             serviceId,
             date: actualLocal.localDate,
             collaboratorId: normalizedCollaboratorId,
@@ -571,8 +826,11 @@ export class DrizzleAiBookingContextProvider
             serviceId,
             collaboratorId: normalizedCollaboratorId,
             startsAt: parsedStartsAt,
-            clientName: clientName?.trim() || input.clientName,
-            clientPhone: input.clientPhone,
+            clientName:
+              sanitizeCustomerName(clientName) ??
+              resolvedCustomerName ??
+              `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`,
+            clientPhone,
             notes: notes?.trim() || "Agendado via WhatsApp IA",
             initialStatus: "CONFIRMED",
           });
@@ -606,6 +864,7 @@ export class DrizzleAiBookingContextProvider
         startsAt,
         collaboratorId,
       }) => {
+        await requireCustomerAppointment(appointmentId);
         const updated = await this.rescheduleAppointmentUseCase.execute({
           actor: aiActor,
           actorSource: "WHATSAPP_AI",
@@ -625,6 +884,7 @@ export class DrizzleAiBookingContextProvider
       },
 
       cancelAppointment: async ({ appointmentId, cancellationReason }) => {
+        await requireCustomerAppointment(appointmentId);
         const updated = await this.updateAppointmentStatusUseCase.execute({
           actor: aiActor,
           actorSource: "WHATSAPP_AI",
@@ -651,11 +911,11 @@ export class DrizzleAiBookingContextProvider
         companyId: companyRow.id,
         companyName: companyRow.companyName,
         timezone: companyRow.timezone,
-        aiSystemPrompt: input.aiSystemPrompt,
+        aiSystemPrompt,
         services: catalog.services,
         collaborators: catalog.collaborators,
         operationalRules,
-        customerContext,
+        customerContext: normalizedCustomerContext,
       },
       tools,
     };

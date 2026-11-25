@@ -6,13 +6,9 @@ import type {
 } from "../../application/ports/ai-booking-agent.port.js";
 import { GeminiBookingAgentAdapter } from "./gemini-booking-agent.adapter.js";
 import { OpenAiBookingAgentAdapter } from "./openai-booking-agent.adapter.js";
-import { SimulatedBookingAgentAdapter } from "./simulated-booking-agent.adapter.js";
+import { bookingContingencyReply } from "./ai-booking-tool-definitions.js";
 
-// Adaptador resiliente: seleciona OpenAI e/ou Gemini via env validado e cai para o SimulatedBookingAgentAdapter
-// caso nenhuma chave esteja configurada ou ocorra falha transitória de rede na API externa.
 export class ResilientAiBookingAgentAdapter implements AiBookingAgentPort {
-  private readonly fallback = new SimulatedBookingAgentAdapter();
-
   async generateReply(
     input: AiBookingAgentInput,
   ): Promise<AiBookingAgentOutput> {
@@ -39,27 +35,28 @@ export class ResilientAiBookingAgentAdapter implements AiBookingAgentPort {
       });
     }
 
-    if (candidates.length === 0) {
-      console.warn(
-        "[WhatsApp AI] Fallback para SIMULATED:",
-        "Nenhuma chave OPENAI_API_KEY ou GEMINI_API_KEY encontrada em process.env.",
-      );
-      return this.fallback.generateReply(input);
-    }
-
     for (const candidate of candidates) {
       try {
         return await candidate.adapter.generateReply(input);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         console.warn(
-          "[WhatsApp AI] Fallback para SIMULATED:",
+          "[WhatsApp AI] Falha no provedor de agendamento:",
           `Provedor ${candidate.name} falhou (${reason})`,
         );
       }
     }
 
-    return this.fallback.generateReply(input);
+    if (!candidates.length) {
+      console.warn("[WhatsApp AI] Nenhum provedor de agendamento configurado.");
+    }
+
+    return {
+      replyText: bookingContingencyReply([]),
+      provider: candidates.at(-1)?.name ?? "UNAVAILABLE",
+      actions: [],
+      converted: false,
+    };
   }
 }
 

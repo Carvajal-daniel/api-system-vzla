@@ -14,10 +14,15 @@ import type { CompanyWhatsAppConnectionRepository } from "../../domain/repositor
 import type { WhatsAppConversationsRepository } from "../../domain/repositories/whatsapp-conversations.repository.js";
 import type { WhatsAppMessagesRepository } from "../../domain/repositories/whatsapp-messages.repository.js";
 import type {
+  AiBookingAgentOutput,
   AiBookingAgentPort,
   AiExecutedToolAction,
 } from "../ports/ai-booking-agent.port.js";
 import type { AiBookingContextProviderPort } from "../ports/ai-booking-context-provider.port.js";
+import {
+  resolveCustomerDisplayName,
+  sanitizeCustomerName,
+} from "../../infra/ai/ai-booking-tool-definitions.js";
 import type { ProactiveInsightsWriterPort } from "../ports/proactive-insights-writer.port.js";
 import type { WhatsAppGatewayPort } from "../ports/whatsapp-gateway.port.js";
 import {
@@ -65,11 +70,12 @@ export interface ProcessInboundWhatsAppMessageInput {
   contactName?: string | null | undefined;
   content: string;
   externalMessageId?: string | null | undefined;
+  providerMessageId?: string | null | undefined;
   sentAt?: Date | undefined;
   source?: "WEBHOOK" | "SIMULATOR" | undefined;
-  // Janela de debounce em ms (4000ms no webhook para agrupar mensagens seguidas; 0ms no simulador/testes).
+  // Janela de debounce em ms (1500ms padrão no webhook para agrupar mensagens seguidas; 0ms no simulador/testes).
   debounceMs?: number | undefined;
-  // Delay humanizado "Digitando..." em ms (5000ms no webhook; 0ms no simulador/testes).
+  // Delay humanizado "Digitando..." em ms (1200ms padrão no webhook; 0ms no simulador/testes).
   typingDelayMs?: number | undefined;
 }
 
@@ -115,6 +121,7 @@ function wrapLegacyDispatchAsGateway(
 // filtro NPS, pausa/anti-spam, governança de cotas, debounce (4s) e resposta humanizada (Digitando + 5s).
 export class ProcessInboundWhatsAppMessageUseCase {
   private readonly turnOrchestrator: WhatsAppAiTurnOrchestrator;
+  private readonly inboundInFlight = new Map<string, Promise<ProcessInboundWhatsAppMessageOutput>>();
   private readonly planQuotaGuard?: PlanQuotaGuardUseCase | undefined;
   private readonly proactiveInsightsWriter?: ProactiveInsightsWriterPort | undefined;
   private readonly npsReplyHandler?: InboundNpsReplyHandlerPort | undefined;
@@ -153,13 +160,37 @@ export class ProcessInboundWhatsAppMessageUseCase {
   async execute(
     input: ProcessInboundWhatsAppMessageInput,
   ): Promise<ProcessInboundWhatsAppMessageOutput> {
-    const normalizedPhone = Phone.create(input.phone).value;
-    const trimmedContent = input.content.trim();
-    const sentAt = input.sentAt ?? new Date();
-    const cleanContactName = input.contactName?.trim() || null;
+    const messageId = input.externalMessageId?.trim() || input.providerMessageId?.trim();
+    if (!messageId) return this.processInbound(input);
 
-    // 1. Idempotência antecipada se externalMessageId já foi processado para esta empresa
-    if (input.externalMessageId?.trim()) {
+    const key = `${input.companyId}:${messageId}`;
+    const inFlight = this.inboundInFlight.get(key);
+    if (inFlight) {
+      const original = await inFlight;
+      return {
+        duplicated: true,
+        conversation: original.conversation,
+        inboundMessage: original.inboundMessage,
+        outboundMessage: null,
+        aiScheduled: false,
+        aiActions: [],
+      };
+    }
+
+    const processing = this.processInbound({ ...input, externalMessageId: messageId });
+    this.inboundInFlight.set(key, processing);
+    try {
+      return await processing;
+    } finally {
+      this.inboundInFlight.delete(key);
+    }
+  }
+
+  private async processInbound(
+    input: ProcessInboundWhatsAppMessageInput,
+  ): Promise<ProcessInboundWhatsAppMessageOutput> {
+    // O índice único do banco também protege entregas em outros processos ou após reinício.
+    if (input.externalMessageId) {
       const existingMessage =
         await this.messagesRepository.findByExternalMessageId(
           input.companyId,
@@ -184,16 +215,20 @@ export class ProcessInboundWhatsAppMessageUseCase {
       }
     }
 
+    const normalizedPhone = Phone.create(input.phone).value;
+    const trimmedContent = input.content.trim();
+    const sentAt = input.sentAt ?? new Date();
+    const cleanContactName = input.contactName?.trim() || null;
+
     // 2. Resolve ou cria o cliente normalizado em `clients` por (companyId, phone)
+    const sanitizedPushName = sanitizeCustomerName(cleanContactName);
     let client = await this.clientsRepository.findByPhone(
       input.companyId,
       normalizedPhone,
     );
     if (!client) {
       const fallbackName =
-        cleanContactName && cleanContactName.length >= 2
-          ? cleanContactName
-          : `Cliente ${normalizedPhone.slice(-4)}`;
+        sanitizedPushName ?? `Cliente ${normalizedPhone.slice(-4)}`;
       try {
         client = await this.clientsRepository.create(
           Client.create({
@@ -210,20 +245,53 @@ export class ProcessInboundWhatsAppMessageUseCase {
           normalizedPhone,
         );
       }
+    } else if (!sanitizeCustomerName(client.name) && sanitizedPushName) {
+      // Substitui automaticamente nomes placeholder (ex.: "Cliente Teste", "Cliente") pelo nome real do WhatsApp.
+      try {
+        client = await this.clientsRepository.update(
+          client.update({ name: sanitizedPushName }),
+        );
+      } catch {
+        // Atualização automática de nome é melhor esforço e não deve bloquear o atendimento.
+      }
     }
 
-    const resolvedName =
-      cleanContactName ?? client?.name ?? `Cliente ${normalizedPhone.slice(-4)}`;
+    // Resolve o nome real para a IA na ordem: nome salvo em `clients` -> `pushName` do WhatsApp -> `null`.
+    // Nunca repassa placeholder literal como "Cliente" ou "Cliente Teste" para o agente conversacional.
+    let resolvedDisplayName = resolveCustomerDisplayName({
+      clientName: client?.name,
+      pushName: sanitizedPushName,
+    });
 
     // 3. Upsert da conversa e gravação idempotente da mensagem INBOUND
     let conversation = await this.conversationsRepository.upsertInbound({
       companyId: input.companyId,
       phone: normalizedPhone,
       clientId: client?.id ?? null,
-      contactName: resolvedName,
+      contactName: resolvedDisplayName,
       sentAt,
       incrementUnread: true,
     });
+
+    // Se o pushName veio vazio neste turno, aproveita o contactName real salvo na conversa do WhatsApp
+    // e corrige automaticamente `clients.name` caso ainda esteja com placeholder.
+    if (!resolvedDisplayName) {
+      const sanitizedConversationName = sanitizeCustomerName(
+        conversation.contactName,
+      );
+      if (sanitizedConversationName) {
+        resolvedDisplayName = sanitizedConversationName;
+        if (client && !sanitizeCustomerName(client.name)) {
+          try {
+            client = await this.clientsRepository.update(
+              client.update({ name: sanitizedConversationName }),
+            );
+          } catch {
+            // Melhor esforço para não interromper o fluxo de resposta.
+          }
+        }
+      }
+    }
 
     const inboundEntity = WhatsAppMessage.create({
       companyId: input.companyId,
@@ -242,9 +310,13 @@ export class ProcessInboundWhatsAppMessageUseCase {
       await this.messagesRepository.createIdempotent(inboundEntity);
 
     if (!created) {
+      const originalConversation = savedInbound.conversationId === conversation.id
+        ? conversation
+        : await this.conversationsRepository.findById(input.companyId, savedInbound.conversationId);
+      if (!originalConversation) throw new Error("Conversa da mensagem duplicada não encontrada.");
       return {
         duplicated: true,
-        conversation: conversation.toDTO(savedInbound.content),
+        conversation: originalConversation.toDTO(savedInbound.content),
         inboundMessage: savedInbound.toDTO(),
         outboundMessage: null,
         aiScheduled: false,
@@ -418,16 +490,42 @@ export class ProcessInboundWhatsAppMessageUseCase {
         ? 0
         : this.turnOrchestrator.getDefaultTypingDelayMs());
 
-    // 8. No webhook real, aplica debounce de 4 segundos para agrupar mensagens picadas
+    const conversationId = conversation.id;
+    const clientId = client?.id ?? null;
+    const aiSystemPrompt = connection?.aiSystemPrompt ?? null;
+
+    const replyToTurn = async (latestMessage: string, now: Date) => {
+      const freshConversation = await this.conversationsRepository.findById(
+        input.companyId,
+        conversationId,
+      );
+      if (
+        !freshConversation ||
+        freshConversation.assignedMode !== "AI_AUTOPILOT" ||
+        (freshConversation.aiPausedUntil && freshConversation.aiPausedUntil > now)
+      ) {
+        return null;
+      }
+
+      return this.runAiReply({
+        companyId: input.companyId,
+        conversation: freshConversation,
+        clientId,
+        clientName: resolvedDisplayName,
+        phone: normalizedPhone,
+        latestMessage,
+        aiSystemPrompt,
+        typingDelayMs,
+        now,
+      });
+    };
+
+    // 8. Agrupa mensagens do webhook antes de entrar na fila da conversa.
     if (debounceMs > 0) {
       this.analyzeConversationUseCase?.triggerAsync({
         companyId: input.companyId,
         conversationId: conversation.id,
       });
-
-      const conversationId = conversation.id;
-      const clientId = client?.id ?? null;
-      const aiSystemPrompt = connection?.aiSystemPrompt ?? null;
 
       this.turnOrchestrator.scheduleTurn({
         tenantId: input.companyId,
@@ -435,35 +533,7 @@ export class ProcessInboundWhatsAppMessageUseCase {
         message: trimmedContent,
         debounceMs,
         onFlush: async (mergedMessage) => {
-          const freshConversation = await this.conversationsRepository.findById(
-            input.companyId,
-            conversationId,
-          );
-          if (
-            !freshConversation ||
-            freshConversation.assignedMode !== "AI_AUTOPILOT"
-          ) {
-            return;
-          }
-          const flushNow = new Date();
-          if (
-            freshConversation.aiPausedUntil &&
-            freshConversation.aiPausedUntil.getTime() > flushNow.getTime()
-          ) {
-            return;
-          }
-
-          await this.runAiReply({
-            companyId: input.companyId,
-            conversation: freshConversation,
-            clientId,
-            clientName: resolvedName,
-            phone: normalizedPhone,
-            latestMessage: mergedMessage,
-            aiSystemPrompt,
-            typingDelayMs,
-            now: flushNow,
-          });
+          await replyToTurn(mergedMessage, new Date());
         },
       });
 
@@ -478,17 +548,11 @@ export class ProcessInboundWhatsAppMessageUseCase {
     }
 
     // 9. Execução imediata (simulador / testes síncronos)
-    const aiResult = await this.runAiReply({
-      companyId: input.companyId,
-      conversation,
-      clientId: client?.id ?? null,
-      clientName: resolvedName,
-      phone: normalizedPhone,
-      latestMessage: trimmedContent,
-      aiSystemPrompt: connection?.aiSystemPrompt ?? null,
-      typingDelayMs,
-      now: sentAt,
-    });
+    const aiResult = await this.turnOrchestrator.runSerially(
+      input.companyId,
+      conversationId,
+      () => replyToTurn(trimmedContent, sentAt),
+    );
 
     return {
       duplicated: false,
@@ -507,7 +571,7 @@ export class ProcessInboundWhatsAppMessageUseCase {
     companyId: string;
     conversation: WhatsAppConversation;
     clientId: string | null;
-    clientName: string;
+    clientName: string | null;
     phone: string;
     latestMessage: string;
     aiSystemPrompt: string | null;
@@ -560,6 +624,7 @@ export class ProcessInboundWhatsAppMessageUseCase {
     const contextBundle = await this.aiContextProvider.buildContextAndTools({
       companyId: params.companyId,
       aiSystemPrompt: params.aiSystemPrompt,
+      clientId: params.clientId,
       clientName: params.clientName,
       clientPhone: params.phone,
     });
@@ -576,23 +641,35 @@ export class ProcessInboundWhatsAppMessageUseCase {
         10,
       );
 
-    const aiOutput = await this.aiAgent.generateReply({
-      company: contextBundle.company,
-      client: {
-        id: params.clientId,
-        name: params.clientName,
-        phone: params.phone,
-      },
-      history: recentMessages.map((msg) => ({
-        direction: msg.direction,
-        senderType: msg.senderType,
-        content: msg.content,
-        sentAt: msg.sentAt.toISOString(),
-      })),
-      latestClientMessage: params.latestMessage,
-      now: params.now,
-      tools: contextBundle.tools,
+    // Mantém presença "composing" ("digitando...") ativa durante toda a inferência do Gemini
+    // (renovando a cada 3500ms) e garante limpeza do timer no bloco finally antes de enviar o texto.
+    const stopComposingHeartbeat = this.turnOrchestrator.startComposingHeartbeat({
+      tenantId: params.companyId,
+      to: params.phone,
     });
+
+    let aiOutput: AiBookingAgentOutput;
+    try {
+      aiOutput = await this.aiAgent.generateReply({
+        company: contextBundle.company,
+        client: {
+          id: params.clientId,
+          name: params.clientName,
+          phone: params.phone,
+        },
+        history: recentMessages.map((msg) => ({
+          direction: msg.direction,
+          senderType: msg.senderType,
+          content: msg.content,
+          sentAt: msg.sentAt.toISOString(),
+        })),
+        latestClientMessage: params.latestMessage,
+        now: params.now,
+        tools: contextBundle.tools,
+      });
+    } finally {
+      stopComposingHeartbeat();
+    }
 
     // Registra tokens reais consumidos pelo Gemini na tabela ai_usage_logs e tenant_usage_metrics
     if (this.planQuotaGuard) {
@@ -649,6 +726,7 @@ export class ProcessInboundWhatsAppMessageUseCase {
         text: aiOutput.replyText,
         purpose: "RECEPTION",
         typingDelayMs: params.typingDelayMs,
+        skipInitialComposing: true,
       });
       externalReferenceId = dispatchResult.externalMessageId ?? null;
     } catch (error) {

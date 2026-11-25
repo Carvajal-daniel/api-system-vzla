@@ -1,8 +1,10 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 export interface GeminiFallbackFetchInput {
   apiKey: string;
   primaryModel: string;
   fallbackModel?: string | undefined;
-  body: Record<string, unknown>;
+  body: Record<string, unknown> | ((model: string) => Record<string, unknown>);
   timeoutMs?: number | undefined;
 }
 
@@ -11,15 +13,13 @@ export interface GeminiFallbackFetchResult {
   usedModel: string;
 }
 
-const RETRYABLE_GEMINI_STATUSES = new Set([404, 429, 503]);
+const RETRYABLE_GEMINI_STATUSES = new Set([429, 503]);
+const GEMINI_MAX_RETRIES = 2;
 
-// Executa generateContent no modelo principal do Gemini e, em caso de 404 (modelo indisponível/descontinuado),
-// 503 (alta demanda) ou 429 (rate limit), faz uma segunda tentativa automática no modelo de fallback antes de falhar.
 export async function fetchGeminiGenerateContentWithFallback(
   input: GeminiFallbackFetchInput,
 ): Promise<GeminiFallbackFetchResult> {
   const timeoutMs = input.timeoutMs ?? 15_000;
-  const serializedBody = JSON.stringify(input.body);
 
   const attempt = async (model: string): Promise<Response> => {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
@@ -30,24 +30,37 @@ export async function fetchGeminiGenerateContentWithFallback(
         "x-goog-api-key": input.apiKey,
       },
       signal: AbortSignal.timeout(timeoutMs),
-      body: serializedBody,
+      body: JSON.stringify(typeof input.body === "function" ? input.body(model) : input.body),
     });
   };
 
-  const primaryResponse = await attempt(input.primaryModel);
-
   const fallbackModel = input.fallbackModel?.trim();
-  if (
-    RETRYABLE_GEMINI_STATUSES.has(primaryResponse.status) &&
-    fallbackModel &&
-    fallbackModel !== input.primaryModel
-  ) {
-    console.warn(
-      `[WhatsApp AI] Gemini ${input.primaryModel} retornou HTTP ${primaryResponse.status}; tentando fallback automático em ${fallbackModel}.`,
-    );
-    const fallbackResponse = await attempt(fallbackModel);
-    return { response: fallbackResponse, usedModel: fallbackModel };
-  }
+  let model = input.primaryModel;
+  let retries = 0;
 
-  return { response: primaryResponse, usedModel: input.primaryModel };
+  while (true) {
+    let response: Response;
+    try {
+      response = await attempt(model);
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== "TimeoutError" || retries >= GEMINI_MAX_RETRIES) {
+        throw error;
+      }
+      retries++;
+      await delay(500 + Math.random() * 500);
+      continue;
+    }
+
+    const transient = RETRYABLE_GEMINI_STATUSES.has(response.status);
+    const changeModel = fallbackModel && fallbackModel !== model &&
+      (transient || response.status === 404);
+    if (retries >= GEMINI_MAX_RETRIES || (!transient && !changeModel)) {
+      return { response, usedModel: model };
+    }
+
+    await response.body?.cancel().catch(() => undefined);
+    if (changeModel) model = fallbackModel;
+    retries++;
+    if (transient) await delay(500 + Math.random() * 500);
+  }
 }

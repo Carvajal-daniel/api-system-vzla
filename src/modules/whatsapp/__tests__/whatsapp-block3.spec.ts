@@ -784,7 +784,7 @@ describe("Bloco 3 — WhatsApp Intelligence & Copiloto IA", () => {
       expect(calledBodies[0]?.generationConfig).toEqual({
         thinkingConfig: { thinkingLevel: "minimal" },
         temperature: 0.4,
-        maxOutputTokens: 250,
+        maxOutputTokens: 500,
       });
     } finally {
       fetchSpy.mockRestore();

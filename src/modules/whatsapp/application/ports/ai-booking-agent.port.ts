@@ -1,8 +1,29 @@
 export interface AiBookingServiceSummary {
   id: string;
   name: string;
+  description?: string | null | undefined;
+  category?: string | undefined;
   durationMinutes: number;
   priceInCents: number;
+}
+
+export interface AiBookingServiceCategoryGroup {
+  category: string;
+  services: AiBookingServiceSummary[];
+}
+
+export interface AiBookingSubscriptionPlanItem {
+  id?: string | undefined;
+  name: string;
+  description?: string | null | undefined;
+  priceInCents?: number | null | undefined;
+  durationMinutes?: number | null | undefined;
+}
+
+export interface AiBookingSubscriptionPlansResult {
+  enabled: boolean;
+  notes: string | null;
+  plans: AiBookingSubscriptionPlanItem[];
 }
 
 export interface AiBookingCollaboratorSummary {
@@ -21,13 +42,17 @@ export interface AiBookingOperationalRules {
 }
 
 export interface AiBookingCustomerContext {
+  isNewCustomer?: boolean;
+  totalVisits?: number;
   registeredName: string | null;
+  mostFrequentServiceName?: string | null;
   lastCompletedVisit?: {
     localDate: string;
     serviceName: string;
     collaboratorName: string;
   } | null;
   preferredCollaboratorName?: string | null;
+  habitualWeekday?: string | null;
   activePackagesOrTags?: string[];
   todayAppointments?: AiBookingCustomerAppointment[];
 }
@@ -53,6 +78,7 @@ export interface AiBookingConversationMessage {
 export interface AiExecutedToolAction {
   tool:
     | "listar_servicos_e_profissionais"
+    | "consultar_planos_assinatura"
     | "consultar_horarios_livres"
     | "consultar_meus_agendamentos"
     | "criar_agendamento"
@@ -105,8 +131,12 @@ export type AiBookingCreateAppointmentResult =
 export interface AiBookingToolExecutor {
   listServicesAndProfessionals(): Promise<{
     services: AiBookingServiceSummary[];
+    servicesByCategory?: AiBookingServiceCategoryGroup[] | undefined;
     collaborators: AiBookingCollaboratorSummary[];
+    subscriptionPlans?: AiBookingSubscriptionPlansResult | undefined;
   }>;
+
+  listSubscriptionPlans?(): Promise<AiBookingSubscriptionPlansResult>;
 
   checkAvailability(input: {
     serviceId: string;
@@ -167,7 +197,7 @@ export interface AiBookingAgentInput {
   company: AiBookingCompanyContext;
   client: {
     id: string | null;
-    name: string;
+    name: string | null;
     phone: string;
   };
   history: AiBookingConversationMessage[];
@@ -184,7 +214,7 @@ export interface AiBookingTokenUsage {
 
 export interface AiBookingAgentOutput {
   replyText: string;
-  provider: "OPENAI" | "GEMINI" | "SIMULATED";
+  provider: "OPENAI" | "GEMINI" | "SIMULATED" | "UNAVAILABLE";
   actions: AiExecutedToolAction[];
   converted?: boolean | undefined;
   handoffRequested?: { reason: string } | undefined;

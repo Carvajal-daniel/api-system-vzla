@@ -1,5 +1,10 @@
 import Fastify from "fastify";
-import { describe, expect, it, vi } from "vitest";
+import jwt from "jsonwebtoken";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resetActorStatusVerifier,
+  setActorStatusVerifier,
+} from "../../../shared/http/auth/authenticate.js";
 import type {
   TenantWhatsAppChannelProvider,
   TenantWhatsAppChannelRecord,
@@ -8,9 +13,16 @@ import type {
 } from "../domain/repositories/tenant-whatsapp-channels.repository.js";
 import {
   buildTenantEvolutionInstanceName,
+  EvolutionApiUnreachableError,
   EvolutionWhatsAppAdapter,
+  extractEvolutionQrCode,
   formatEvolutionPhoneNumber,
 } from "../infra/adapters/whatsapp/evolution-whatsapp.adapter.js";
+import { WhatsAppAiTurnOrchestrator } from "../application/services/whatsapp-ai-turn-orchestrator.js";
+import {
+  buildAiBookingSystemPrompt,
+  normalizeWhatsAppFormatting,
+} from "../infra/ai/ai-booking-tool-definitions.js";
 import { registerEvolutionChannelsWebhookRoutes } from "../infra/http/evolution-channels-webhook.routes.js";
 
 class InMemoryTenantWhatsAppChannelsRepository
@@ -252,6 +264,178 @@ describe("EvolutionWhatsAppAdapter (REST API v2)", () => {
       text: "Olá Lucas, seu horário é às 15:00.",
     });
   });
+
+  it("extracts QR Code across Evolution v2 formats (qrcode.base64, base64, code)", () => {
+    expect(
+      extractEvolutionQrCode({ qrcode: { base64: "iVBORw0KGgoAAA" } }),
+    ).toBe("data:image/png;base64,iVBORw0KGgoAAA");
+    expect(
+      extractEvolutionQrCode({ base64: "data:image/png;base64,AAAA" }),
+    ).toBe("data:image/png;base64,AAAA");
+    expect(extractEvolutionQrCode({ code: "2@raw-qr-payload-v2" })).toBe(
+      "2@raw-qr-payload-v2",
+    );
+    expect(extractEvolutionQrCode({})).toBeNull();
+  });
+
+  it.each([400, 403, 409])(
+    "falls back to GET /instance/connect when POST /instance/create returns %i (existing instance) and ignores webhook/set failure without breaking QR Code",
+    async (createStatus) => {
+      const repo = new InMemoryTenantWhatsAppChannelsRepository();
+      const logger = { warn: vi.fn() };
+
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith("/instance/create")) {
+          return new Response(
+            JSON.stringify({ message: "Instance already exists" }),
+            { status: createStatus },
+          );
+        }
+        if (url.includes("/webhook/set/")) {
+          return new Response(
+            JSON.stringify({ message: "Webhook validation warning" }),
+            { status: 400 },
+          );
+        }
+        if (url.includes("/instance/connect/")) {
+          return new Response(
+            JSON.stringify({
+              code: "2@qr-code-fallback",
+              pairingCode: "ABCD-1234",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      }) as unknown as typeof fetch;
+
+      const adapter = new EvolutionWhatsAppAdapter(repo, fetchMock, () => ({
+        apiUrl: "http://localhost:8085",
+        apiKey: "evo-global-secret",
+        webhookSecret: "wh-secret-123",
+        backendPublicUrl: "http://host.docker.internal:5148",
+      }));
+
+      const result = await adapter.connectInstance(
+        tenantId,
+        instanceName,
+        logger,
+      );
+
+      expect(result).toEqual({
+        instanceName,
+        qrCodeBase64: "2@qr-code-fallback",
+        pairingCode: "ABCD-1234",
+        status: "QRCODE_PENDING",
+        phoneNumber: null,
+      });
+
+      const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock
+        .calls as [string, RequestInit][];
+      expect(calls).toHaveLength(3);
+      expect(calls[1]?.[0]).toBe(
+        `http://localhost:8085/webhook/set/${instanceName}`,
+      );
+      expect(JSON.parse(String(calls[1]?.[1].body))).toEqual({
+        webhook: {
+          enabled: true,
+          url: "http://host.docker.internal:5148/v1/whatsapp/webhooks/evolution?secret=wh-secret-123",
+          webhookByEvents: false,
+          webhookBase64: false,
+          events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE"],
+        },
+      });
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("throws EvolutionApiUnreachableError on ECONNREFUSED network failure", async () => {
+    const repo = new InMemoryTenantWhatsAppChannelsRepository();
+    const networkErr = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "ECONNREFUSED" },
+    });
+    const fetchMock = vi.fn(async () => {
+      throw networkErr;
+    }) as unknown as typeof fetch;
+
+    const adapter = new EvolutionWhatsAppAdapter(repo, fetchMock, () => ({
+      apiUrl: "http://localhost:8085",
+      apiKey: "evo-global-secret",
+    }));
+
+    await expect(
+      adapter.connectInstance(tenantId, instanceName),
+    ).rejects.toBeInstanceOf(EvolutionApiUnreachableError);
+  });
+
+  it("maps Evolution v2 GET /instance/connectionState payloads (open, connecting, close) accurately", async () => {
+    const repo = new InMemoryTenantWhatsAppChannelsRepository();
+    const responses = [
+      {
+        instance: {
+          instanceName,
+          state: "open",
+          ownerJid: "558597926400@s.whatsapp.net",
+        },
+      },
+      {
+        instance: {
+          instanceName,
+          state: "connecting",
+        },
+      },
+      {
+        instance: {
+          instanceName,
+          connectionStatus: "open",
+          owner: "5511999990000@s.whatsapp.net",
+        },
+      },
+      {
+        instance: {
+          instanceName,
+          state: "close",
+        },
+      },
+    ];
+    let idx = 0;
+    const fetchMock = vi.fn(async () => {
+      const payload = responses[idx++];
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const adapter = new EvolutionWhatsAppAdapter(repo, fetchMock, () => ({
+      apiUrl: "http://localhost:8085",
+      apiKey: "evo-global-key",
+    }));
+
+    expect(await adapter.getInstanceConnectionState(instanceName)).toEqual({
+      instanceName,
+      status: "CONNECTED",
+      phoneNumber: "+558597926400",
+    });
+    expect(await adapter.getInstanceConnectionState(instanceName)).toEqual({
+      instanceName,
+      status: "QRCODE_PENDING",
+      phoneNumber: null,
+    });
+    expect(await adapter.getInstanceConnectionState(instanceName)).toEqual({
+      instanceName,
+      status: "CONNECTED",
+      phoneNumber: "+5511999990000",
+    });
+    expect(await adapter.getInstanceConnectionState(instanceName)).toEqual({
+      instanceName,
+      status: "DISCONNECTED",
+      phoneNumber: null,
+    });
+  });
 });
 
 describe("Webhook POST /v1/whatsapp/webhooks/evolution", () => {
@@ -487,5 +671,244 @@ describe("Webhook POST /v1/whatsapp/webhooks/evolution", () => {
       }),
     );
     await app.close();
+  });
+
+  it("accepts lowercase dotted Evolution v2 event names (connection.update and messages.upsert) and remoteJidAlt fallback", async () => {
+    const { app, repo, processInboundSpy } = await buildTestApp();
+
+    const connResponse = await app.inject({
+      method: "POST",
+      url: `/v1/whatsapp/webhooks/evolution?secret=${webhookSecret}`,
+      payload: {
+        event: "connection.update",
+        instance: instanceA,
+        data: {
+          state: "open",
+          wuid: "5511977776666@s.whatsapp.net",
+        },
+      },
+    });
+
+    expect(connResponse.statusCode).toBe(200);
+    expect(connResponse.json()).toEqual({
+      accepted: true,
+      event: "CONNECTION_UPDATE",
+      status: "CONNECTED",
+    });
+    expect(
+      (await repo.findByTenantAndProvider(tenantA, "EVOLUTION"))?.status,
+    ).toBe("CONNECTED");
+
+    const msgResponse = await app.inject({
+      method: "POST",
+      url: `/v1/whatsapp/webhooks/evolution?secret=${webhookSecret}`,
+      payload: {
+        event: "messages.upsert",
+        instance: instanceB,
+        data: {
+          key: {
+            id: "MSG_DOT_1",
+            fromMe: false,
+            remoteJid: "12345@lid",
+            remoteJidAlt: "5511966665555@s.whatsapp.net",
+          },
+          pushName: "Carlos",
+          message: { conversation: "Tem horário hoje?" },
+        },
+      },
+    });
+
+    expect(msgResponse.statusCode).toBe(200);
+    expect(msgResponse.json()).toMatchObject({ accepted: true });
+    expect(processInboundSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: tenantB,
+        phone: "+5511966665555",
+        content: "Tem horário hoje?",
+      }),
+    );
+
+    await app.close();
+  });
+});
+
+describe("Owner route POST /v1/whatsapp/channels/evolution/connect error handling", () => {
+  const tenantId = "bcae5ba5-1111-4111-8111-111111111111";
+  const ownerId = "aaaaaaaa-0000-4000-8000-000000000001";
+  const previousJwtSecret = process.env.JWT_SECRET;
+
+  afterEach(() => {
+    resetActorStatusVerifier();
+    if (previousJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = previousJwtSecret;
+    }
+  });
+
+  function signOwnerToken(): string {
+    const secret = "test-jwt-secret-evolution-connect";
+    process.env.JWT_SECRET = secret;
+    return jwt.sign(
+      { sub: ownerId, companyId: tenantId, role: "OWNER" },
+      secret,
+      { expiresIn: "1h" },
+    );
+  }
+
+  it("returns 502 with a clear Portuguese message when Evolution API container is unreachable (ECONNREFUSED)", async () => {
+    setActorStatusVerifier(async () => true);
+    const repo = new InMemoryTenantWhatsAppChannelsRepository();
+    const fetchMock = vi.fn(async () => {
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNREFUSED" },
+      });
+    }) as unknown as typeof fetch;
+
+    const adapter = new EvolutionWhatsAppAdapter(repo, fetchMock, () => ({
+      apiUrl: "http://localhost:8085",
+      apiKey: "evo-key",
+    }));
+
+    const app = Fastify();
+    await registerEvolutionChannelsWebhookRoutes(app, {
+      channelsRepository: repo,
+      evolutionAdapter: adapter,
+      processInboundUseCase: { execute: vi.fn() as never },
+      envProvider: () => ({
+        apiUrl: "http://localhost:8085",
+        apiKey: "evo-key",
+      }),
+      isConfiguredProvider: () => true,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/whatsapp/channels/evolution/connect",
+      headers: { authorization: `Bearer ${signOwnerToken()}` },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({
+      message:
+        "Servidor Evolution API inacessível. Verifique se o container Docker está rodando.",
+    });
+
+    await app.close();
+  });
+
+  it("returns 400 with a clear Portuguese message when Evolution API config is missing inside adapter", async () => {
+    setActorStatusVerifier(async () => true);
+    const repo = new InMemoryTenantWhatsAppChannelsRepository();
+    const adapter = new EvolutionWhatsAppAdapter(repo, globalThis.fetch, () => ({
+      apiUrl: undefined,
+      apiKey: undefined,
+    }));
+
+    const app = Fastify();
+    await registerEvolutionChannelsWebhookRoutes(app, {
+      channelsRepository: repo,
+      evolutionAdapter: adapter,
+      processInboundUseCase: { execute: vi.fn() as never },
+      envProvider: () => ({}),
+      isConfiguredProvider: () => true,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/whatsapp/channels/evolution/connect",
+      headers: { authorization: `Bearer ${signOwnerToken()}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      message:
+        "Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY).",
+    });
+
+    await app.close();
+  });
+});
+
+describe("WhatsApp AI prompt hygiene, native formatting and orchestrator error logging", () => {
+  it("enforces no-thinking-aloud, service duration lookup, and native WhatsApp bold in system prompt", () => {
+    const prompt = buildAiBookingSystemPrompt({
+      company: {
+        companyId: "bcae5ba5-1e4b-446e-93d6-4870b292a7ca",
+        companyName: "Tapa no Corte",
+        timezone: "America/Sao_Paulo",
+        aiSystemPrompt: null,
+        services: [
+          {
+            id: "svc-1",
+            name: "Combo Corte + Barba",
+            priceInCents: 7500,
+            durationMinutes: 60,
+          },
+        ],
+        collaborators: [
+          {
+            id: "col-1",
+            name: "Nicolas",
+            specialty: "Barbeiro",
+            serviceIds: ["svc-1"],
+          },
+        ],
+      },
+      client: { id: "cli-1", name: "Daniel", phone: "+5585921842910" },
+      history: [],
+      latestClientMessage: "Corte + barba às 16:00?",
+      now: new Date("2026-11-25T21:00:00.000Z"),
+      tools: {} as never,
+    });
+
+    expect(prompt).toContain("PROIBIDO PENSAR EM VOZ ALTA");
+    expect(prompt).toContain("FORMATAÇÃO NATIVA DE WHATSAPP");
+    expect(prompt).toContain("(**texto**)");
+    expect(prompt).toContain("(*texto*)");
+  });
+
+  it("normalizes accidental **bold** Markdown to native WhatsApp *bold*", () => {
+    expect(
+      normalizeWhatsAppFormatting(
+        "Os horários livres são **15:00** e **17:00** por **R$ 75,00**.",
+      ),
+    ).toBe("Os horários livres são *15:00* e *17:00* por *R$ 75,00*.");
+  });
+
+  it("logs structured error when debounced onFlush callback fails instead of swallowing silently", async () => {
+    const logger = { error: vi.fn() };
+    const orchestrator = new WhatsAppAiTurnOrchestrator(
+      {
+        sendText: vi.fn(),
+        sendTemplate: vi.fn(),
+        sendPresence: vi.fn(),
+        getChannelsStatus: vi.fn(),
+      },
+      { defaultDebounceMs: 10, defaultTypingDelayMs: 0, logger },
+    );
+
+    orchestrator.scheduleTurn({
+      tenantId: "tenant-1",
+      conversationId: "conv-1",
+      message: "Oi",
+      debounceMs: 10,
+      onFlush: async () => {
+        throw new Error("Simulated Gemini outage");
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        conversationId: "conv-1",
+        err: expect.any(Error),
+      }),
+      "Failed to flush debounced WhatsApp AI turn",
+    );
+    orchestrator.dispose();
   });
 });

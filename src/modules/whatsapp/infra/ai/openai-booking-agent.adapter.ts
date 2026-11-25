@@ -6,8 +6,10 @@ import type {
 } from "../../application/ports/ai-booking-agent.port.js";
 import {
   AI_BOOKING_TOOL_DEFINITIONS,
+  bookingContingencyReply,
   buildAiBookingSystemPrompt,
   dispatchAiBookingToolCall,
+  normalizeWhatsAppFormatting,
 } from "./ai-booking-tool-definitions.js";
 
 interface OpenAiToolCall {
@@ -37,6 +39,30 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
     input: AiBookingAgentInput,
   ): Promise<AiBookingAgentOutput> {
     const actions: AiExecutedToolAction[] = [];
+    try {
+      return await this.runTurn(input, actions);
+    } catch (error) {
+      const handoff = actions.find((action) => action.tool === "request_human_handoff" && action.ok);
+      const converted = actions.some((action) =>
+        action.ok && (action.tool === "criar_agendamento" || action.tool === "reagendar_agendamento"),
+      );
+      const canceled = actions.some((action) => action.tool === "cancelar_agendamento" && action.ok);
+      if (!converted && !canceled && !handoff) throw error;
+      console.warn("[WhatsApp AI] Falha no OpenAI após executar ação:", error);
+      return {
+        replyText: bookingContingencyReply(actions),
+        provider: "OPENAI",
+        actions,
+        converted,
+        ...(handoff ? { handoffRequested: handoff.data as { reason: string } } : {}),
+      };
+    }
+  }
+
+  private async runTurn(
+    input: AiBookingAgentInput,
+    actions: AiExecutedToolAction[],
+  ): Promise<AiBookingAgentOutput> {
     let converted = false;
     let handoffRequested: { reason: string } | undefined;
 
@@ -102,9 +128,9 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
       const toolCalls = assistantMessage?.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
-        const replyText =
-          assistantMessage?.content?.trim() ||
-          "Olá! Como posso ajudar com seu agendamento hoje?";
+        const replyText = normalizeWhatsAppFormatting(
+          assistantMessage?.content ?? "",
+        ) || bookingContingencyReply(actions);
         return {
           replyText,
           provider: "OPENAI",
