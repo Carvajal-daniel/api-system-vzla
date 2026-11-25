@@ -22,9 +22,32 @@ export interface TenantWhatsAppChannelRecord {
   updatedAt: Date;
 }
 
-// Contrato de domínio para leitura de canais híbridos de WhatsApp, sempre isolados por tenantId.
+export interface UpsertTenantWhatsAppChannelInput {
+  tenantId: string;
+  provider: TenantWhatsAppChannelProvider;
+  purpose?: TenantWhatsAppChannelPurpose | undefined;
+  phoneNumber?: string | null | undefined;
+  status: TenantWhatsAppChannelStatus;
+  credentials?: Record<string, unknown> | undefined;
+}
+
+// Contrato de domínio para leitura e gestão de canais híbridos de WhatsApp, sempre isolados por tenantId.
 export interface TenantWhatsAppChannelsRepository {
   listByTenant(tenantId: string): Promise<TenantWhatsAppChannelRecord[]>;
 
   listConnectedByTenant(tenantId: string): Promise<TenantWhatsAppChannelRecord[]>;
+
+  findByTenantAndProvider(
+    tenantId: string,
+    provider: TenantWhatsAppChannelProvider,
+  ): Promise<TenantWhatsAppChannelRecord | null>;
+
+  // Utilizado exclusivamente pelo webhook Evolution para resolver o tenantId real a partir da instância registrada no banco.
+  findByEvolutionInstanceName(
+    instanceName: string,
+  ): Promise<TenantWhatsAppChannelRecord | null>;
+
+  upsertChannel(
+    input: UpsertTenantWhatsAppChannelInput,
+  ): Promise<TenantWhatsAppChannelRecord>;
 }

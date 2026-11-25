@@ -9,6 +9,45 @@ const optionalNonEmptyString = z.preprocess(
   z.string().min(1).optional(),
 );
 
+const optionalUrlString = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  },
+  z.string().url().optional(),
+);
+
+// Schema de validação opcional para integração com Evolution API v2 e webhook público.
+export const evolutionEnvSchema = z.object({
+  EVOLUTION_API_URL: optionalUrlString,
+  EVOLUTION_API_KEY: optionalNonEmptyString,
+  EVOLUTION_WEBHOOK_SECRET: optionalNonEmptyString,
+  BACKEND_PUBLIC_URL: optionalUrlString,
+});
+
+export interface EvolutionEnvConfig {
+  apiUrl?: string | undefined;
+  apiKey?: string | undefined;
+  webhookSecret?: string | undefined;
+  backendPublicUrl?: string | undefined;
+}
+
+export function getEvolutionEnv(): EvolutionEnvConfig {
+  const parsed = evolutionEnvSchema.parse(process.env);
+  return {
+    apiUrl: parsed.EVOLUTION_API_URL?.replace(/\/+$/, ""),
+    apiKey: parsed.EVOLUTION_API_KEY,
+    webhookSecret: parsed.EVOLUTION_WEBHOOK_SECRET,
+    backendPublicUrl: parsed.BACKEND_PUBLIC_URL?.replace(/\/+$/, ""),
+  };
+}
+
+export function isEvolutionApiConfigured(): boolean {
+  const config = getEvolutionEnv();
+  return Boolean(config.apiUrl && config.apiKey);
+}
+
 // Schema de validação opcional das chaves e modelos de IA (OpenAI e Gemini).
 export const aiEnvSchema = z.object({
   GEMINI_API_KEY: optionalNonEmptyString,

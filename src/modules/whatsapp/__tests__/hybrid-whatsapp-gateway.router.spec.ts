@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppGatewayPort } from "../application/ports/whatsapp-gateway.port.js";
 import type {
+  TenantWhatsAppChannelProvider,
   TenantWhatsAppChannelRecord,
   TenantWhatsAppChannelsRepository,
+  UpsertTenantWhatsAppChannelInput,
 } from "../domain/repositories/tenant-whatsapp-channels.repository.js";
 import { MockWhatsAppAdapter } from "../infra/adapters/whatsapp/mock-whatsapp.adapter.js";
 import { WhatsAppGatewayRouter } from "../infra/adapters/whatsapp/whatsapp-gateway.router.js";
@@ -23,6 +25,64 @@ class InMemoryTenantWhatsAppChannelsRepository
       (channel) =>
         channel.tenantId === tenantId && channel.status === "CONNECTED",
     );
+  }
+
+  async findByTenantAndProvider(
+    tenantId: string,
+    provider: TenantWhatsAppChannelProvider,
+  ): Promise<TenantWhatsAppChannelRecord | null> {
+    return (
+      this.channels.find(
+        (channel) =>
+          channel.tenantId === tenantId && channel.provider === provider,
+      ) ?? null
+    );
+  }
+
+  async findByEvolutionInstanceName(
+    instanceName: string,
+  ): Promise<TenantWhatsAppChannelRecord | null> {
+    return (
+      this.channels.find(
+        (channel) =>
+          channel.provider === "EVOLUTION" &&
+          channel.credentials["instanceName"] === instanceName,
+      ) ?? null
+    );
+  }
+
+  async upsertChannel(
+    input: UpsertTenantWhatsAppChannelInput,
+  ): Promise<TenantWhatsAppChannelRecord> {
+    const existing = await this.findByTenantAndProvider(
+      input.tenantId,
+      input.provider,
+    );
+    const now = new Date();
+    if (existing) {
+      existing.status = input.status;
+      if (input.purpose) existing.purpose = input.purpose;
+      if (input.phoneNumber !== undefined) existing.phoneNumber = input.phoneNumber;
+      if (input.credentials) {
+        existing.credentials = { ...existing.credentials, ...input.credentials };
+      }
+      existing.updatedAt = now;
+      return existing;
+    }
+
+    const created: TenantWhatsAppChannelRecord = {
+      id: `ch-${this.channels.length + 1}`,
+      tenantId: input.tenantId,
+      provider: input.provider,
+      purpose: input.purpose ?? "ALL",
+      phoneNumber: input.phoneNumber ?? null,
+      status: input.status,
+      credentials: input.credentials ?? {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.channels.push(created);
+    return created;
   }
 }
 

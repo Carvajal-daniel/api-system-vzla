@@ -25,7 +25,9 @@ import { SendOwnerWhatsAppMessageUseCase } from "../../application/use-cases/sen
 import { SendWhatsAppFollowupUseCase } from "../../application/use-cases/send-whatsapp-followup.use-case.js";
 import { UpdateWhatsAppConversationModeUseCase } from "../../application/use-cases/update-whatsapp-conversation-mode.use-case.js";
 import { UpdateWhatsAppSettingsUseCase } from "../../application/use-cases/update-whatsapp-settings.use-case.js";
+import { EvolutionWhatsAppAdapter as HybridEvolutionWhatsAppAdapter } from "../adapters/whatsapp/evolution-whatsapp.adapter.js";
 import { WhatsAppGatewayRouter as HybridWhatsAppGatewayRouter } from "../adapters/whatsapp/whatsapp-gateway.router.js";
+import { registerEvolutionChannelsWebhookRoutes } from "./evolution-channels-webhook.routes.js";
 import { ResilientBusinessCopilotAdapter } from "../ai/business-copilot.adapter.js";
 import { ResilientConversationAnalyzerAdapter } from "../ai/conversation-analyzer.adapter.js";
 import { createAiBookingAgentAdapter } from "../ai/create-ai-booking-agent.js";
@@ -236,6 +238,11 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
   const tenantUsageRepository = new DrizzleTenantUsageRepository();
   const planQuotaGuard = new PlanQuotaGuardUseCase(tenantUsageRepository);
   const tenantChannelsRepository = new DrizzleTenantWhatsAppChannelsRepository();
+  const hybridEvolutionAdapter = new HybridEvolutionWhatsAppAdapter(
+    tenantChannelsRepository,
+  );
+  // O WhatsAppGatewayRouter ativa EvolutionWhatsAppAdapter automaticamente quando EVOLUTION_API_URL/KEY estiverem configuradas,
+  // mantendo fallback seguro para MockWhatsAppAdapter em ambientes sem Evolution.
   const hybridGatewayRouter = new HybridWhatsAppGatewayRouter(
     tenantChannelsRepository,
   );
@@ -292,6 +299,15 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     conversationsRepository,
     turnOrchestrator,
   );
+
+  // =========================================================================
+  // Etapa 5: Gestão de Canais Evolution (QR Code) e Webhook Seguro v2
+  // =========================================================================
+  await registerEvolutionChannelsWebhookRoutes(app, {
+    channelsRepository: tenantChannelsRepository,
+    evolutionAdapter: hybridEvolutionAdapter,
+    processInboundUseCase,
+  });
 
   // =========================================================================
   // Bloco 1: Conexão Evolution / Datafy e configurações de IA

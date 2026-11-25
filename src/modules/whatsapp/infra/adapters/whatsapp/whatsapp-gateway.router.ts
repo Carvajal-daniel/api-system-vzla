@@ -1,3 +1,4 @@
+import { isEvolutionApiConfigured } from "../../../../../shared/config/env.js";
 import type {
   ChannelStatus,
   MaskedChannelCredentials,
@@ -13,6 +14,7 @@ import type {
   TenantWhatsAppChannelRecord,
   TenantWhatsAppChannelsRepository,
 } from "../../../domain/repositories/tenant-whatsapp-channels.repository.js";
+import { EvolutionWhatsAppAdapter } from "./evolution-whatsapp.adapter.js";
 import { MockWhatsAppAdapter } from "./mock-whatsapp.adapter.js";
 
 function maskSecret(secret: string): string {
@@ -74,6 +76,8 @@ export function maskChannelCredentials(
 // (CAMPAIGN prioriza CAMPAIGNS_ONLY -> ALL; RECEPTION prioriza RECEPTION_ONLY -> ALL)
 // e faz fallback seguro para MockWhatsAppAdapter quando nenhum canal externo estiver conectado.
 export class WhatsAppGatewayRouter implements WhatsAppGatewayPort {
+  private defaultEvolutionAdapter: WhatsAppGatewayPort | null = null;
+
   constructor(
     private readonly channelsRepository: TenantWhatsAppChannelsRepository,
     private readonly mockAdapter: WhatsAppGatewayPort = new MockWhatsAppAdapter(),
@@ -130,7 +134,20 @@ export class WhatsAppGatewayRouter implements WhatsAppGatewayPort {
       return this.mockAdapter;
     }
 
-    return this.providerAdapters[selected.provider] ?? this.mockAdapter;
+    const explicitAdapter = this.providerAdapters[selected.provider];
+    if (explicitAdapter) {
+      return explicitAdapter;
+    }
+
+    // Quando houver canal EVOLUTION conectado e a Evolution API estiver configurada, roteia automaticamente para o adaptador real.
+    if (selected.provider === "EVOLUTION" && isEvolutionApiConfigured()) {
+      this.defaultEvolutionAdapter ??= new EvolutionWhatsAppAdapter(
+        this.channelsRepository,
+      );
+      return this.defaultEvolutionAdapter;
+    }
+
+    return this.mockAdapter;
   }
 
   private selectChannelForPurpose(
