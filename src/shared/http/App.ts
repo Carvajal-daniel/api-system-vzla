@@ -20,6 +20,7 @@ import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.r
 import { orderRoutes } from "../../modules/finance/infra/http/routes/order.routes.js";
 import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.routes.js";
 import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
+import { intelligenceRoutes } from "../../modules/intelligence/infra/http/intelligence.routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { whatsappRoutes } from "../../modules/whatsapp/infra/http/whatsapp.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
@@ -110,5 +111,6 @@ app.register(clientRecoveryRoutes);
 app.register(clientsRoutes);
 app.register(whatsappRoutes);
 app.register(billingRoutes);
+app.register(intelligenceRoutes);
 
 export { app };
