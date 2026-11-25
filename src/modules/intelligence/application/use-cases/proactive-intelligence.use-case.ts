@@ -121,6 +121,7 @@ export class ProactiveIntelligenceUseCase {
     tenantId: string,
     insightId: string,
     now: Date = new Date(),
+    options?: { overrideMessage?: string | undefined },
   ): Promise<ExecuteProactiveInsightResult> {
     const insight = await this.insightsRepository.findByIdForTenant(
       tenantId,
@@ -149,40 +150,49 @@ export class ProactiveIntelligenceUseCase {
       if (
         actionType === "SEND_APOLOGY_WHATSAPP" &&
         typeof payload.clientPhone === "string" &&
-        typeof payload.draftMessage === "string"
+        (typeof options?.overrideMessage === "string" ||
+          typeof payload.draftMessage === "string")
       ) {
-        const quota = await this.planQuotaGuard.checkCanSendOutbound(
-          tenantId,
-          now,
-        );
-        if (!quota.allowed) {
-          throw new ProactiveInsightQuotaExceededError(
-            quota.reason ?? "Limite mensal de disparos WhatsApp atingido.",
+        const messageToSend =
+          options?.overrideMessage?.trim() ||
+          (typeof payload.draftMessage === "string"
+            ? payload.draftMessage.trim()
+            : "");
+        if (messageToSend) {
+          const quota = await this.planQuotaGuard.checkCanSendOutbound(
+            tenantId,
+            now,
           );
+          if (!quota.allowed) {
+            throw new ProactiveInsightQuotaExceededError(
+              quota.reason ?? "Limite mensal de disparos WhatsApp atingido.",
+            );
+          }
+
+          const normalizedPhone = Phone.create(payload.clientPhone).value;
+          await this.whatsappGateway.sendText({
+            tenantId,
+            to: normalizedPhone,
+            text: messageToSend,
+            purpose: "RECEPTION",
+          });
+
+          await this.planQuotaGuard.recordAiUsage({
+            tenantId,
+            feature: "RETENTION",
+            model: "manual-approval",
+            promptTokens: 0,
+            completionTokens: 0,
+            incrementOutbound: true,
+            metadata: {
+              insightId: insight.id,
+              actionType,
+              editedByOwner: Boolean(options?.overrideMessage?.trim()),
+            },
+            now,
+          });
+          dispatchedMessagesCount = 1;
         }
-
-        const normalizedPhone = Phone.create(payload.clientPhone).value;
-        await this.whatsappGateway.sendText({
-          tenantId,
-          to: normalizedPhone,
-          text: payload.draftMessage,
-          purpose: "RECEPTION",
-        });
-
-        await this.planQuotaGuard.recordAiUsage({
-          tenantId,
-          feature: "RETENTION",
-          model: "manual-approval",
-          promptTokens: 0,
-          completionTokens: 0,
-          incrementOutbound: true,
-          metadata: {
-            insightId: insight.id,
-            actionType,
-          },
-          now,
-        });
-        dispatchedMessagesCount = 1;
       } else if (
         actionType === "WHATSAPP_BROADCAST" &&
         Array.isArray(payload.recipients) &&

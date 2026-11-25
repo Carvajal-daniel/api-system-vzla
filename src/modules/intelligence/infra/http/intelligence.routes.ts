@@ -43,6 +43,12 @@ const insightIdParamSchema = z.object({
   id: z.string().uuid(),
 });
 
+const executeInsightBodySchema = z
+  .object({
+    overrideMessage: z.string().trim().min(1).max(4000).optional(),
+  })
+  .optional();
+
 const moduleAnalyzeParamSchema = z.object({
   module: z.enum(INTELLIGENCE_MODULES),
 });
@@ -266,10 +272,22 @@ export async function intelligenceRoutes(
         });
       }
 
+      const parsedBody = executeInsightBodySchema.safeParse(
+        request.body ?? undefined,
+      );
+      if (!parsedBody.success) {
+        return reply.status(400).send({
+          message: "Mensagem customizada inválida.",
+          issues: parsedBody.error.issues,
+        });
+      }
+
       try {
         const result = await proactiveIntelligenceUseCase.executeInsight(
           tenantId,
           parsed.data.id,
+          new Date(),
+          { overrideMessage: parsedBody.data?.overrideMessage },
         );
         return reply.status(200).send(result);
       } catch (error) {

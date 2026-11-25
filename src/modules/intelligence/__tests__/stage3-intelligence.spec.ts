@@ -733,6 +733,34 @@ describe("Stage 3 — Proactive Insights, Module Analysis, Copilot SSE & Daily B
     });
     expect(listAfterA.json().pendingCount).toBe(3);
 
+    // 5b. Insight UNHAPPY_CLIENT_RESCUE aceita overrideMessage editado pelo dono antes do disparo
+    const apologyInsight = await insightsRepo.create({
+      tenantId: tenantA,
+      module: "CLIENTS",
+      type: "UNHAPPY_CLIENT_RESCUE",
+      title: "Resgate sensível: Cliente Teste",
+      description: "Nota 2/5",
+      actionPayload: {
+        actionType: "SEND_APOLOGY_WHATSAPP",
+        clientId: "c-override",
+        clientName: "Cliente Teste",
+        clientPhone: "+5511977776666",
+        draftMessage: "Rascunho original",
+      },
+    });
+    const execOverride = await app.inject({
+      method: "POST",
+      url: `/v1/intelligence/insights/${apologyInsight.id}/execute`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { overrideMessage: "Mensagem personalizada pelo dono!" },
+    });
+    expect(execOverride.statusCode).toBe(200);
+    expect(execOverride.json().dispatchedMessagesCount).toBe(1);
+    expect(gateway.sentTexts.at(-1)).toMatchObject({
+      to: "+5511977776666",
+      text: "Mensagem personalizada pelo dono!",
+    });
+
     // 6. Análise instantânea por módulo
     const moduleRes = await app.inject({
       method: "POST",
