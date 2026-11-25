@@ -42,6 +42,11 @@ export const AppointmentTable = pgTable(
     cancellationReason: text("cancellation_reason"),
     notes: text("notes"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    // Flags idempotentes de envio de lembretes (24h/2h) e pesquisa pós-atendimento (NPS 1-5).
+    reminder24hSentAt: timestamp("reminder_24h_sent_at", { withTimezone: true }),
+    reminder2hSentAt: timestamp("reminder_2h_sent_at", { withTimezone: true }),
+    npsSentAt: timestamp("nps_sent_at", { withTimezone: true }),
+    npsRespondedAt: timestamp("nps_responded_at", { withTimezone: true }),
     // Preserve the booked service; the commission rate is refreshed when the professional changes.
     serviceNameSnapshot: text("service_name_snapshot").notNull(),
     servicePriceInCentsSnapshot: integer(

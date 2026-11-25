@@ -145,6 +145,21 @@ export const AI_BOOKING_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ["appointmentId"],
     },
   },
+  {
+    name: "request_human_handoff",
+    description:
+      "Aciona o transbordo para um atendente humano/barbeiro sempre que o cliente pedir para falar com uma pessoa ou enviar uma solicitação que exija intervenção humana.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description: "Motivo resumido do pedido de atendimento humano.",
+        },
+      },
+      required: ["reason"],
+    },
+  },
 ];
 
 export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
@@ -172,6 +187,60 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
     ? `\nInstruções personalizadas da empresa:\n${input.company.aiSystemPrompt.trim()}\n`
     : "";
 
+  const rules = input.company.operationalRules;
+  const operationalLines: string[] = [];
+  if (rules?.address) operationalLines.push(`- Endereço: ${rules.address}`);
+  if (rules?.googleMapsUrl) {
+    operationalLines.push(`- Link do Google Maps: ${rules.googleMapsUrl}`);
+  }
+  if (rules?.paymentMethods) {
+    operationalLines.push(`- Formas de pagamento: ${rules.paymentMethods}`);
+  }
+  if (rules?.delayPolicy) {
+    operationalLines.push(`- Política de atraso/cancelamento: ${rules.delayPolicy}`);
+  }
+  if (rules?.packageNotes) {
+    operationalLines.push(`- Pacotes/Assinaturas: ${rules.packageNotes}`);
+  }
+  const operationalSummary =
+    operationalLines.length > 0
+      ? `\nRegras operacionais da empresa:\n${operationalLines.join("\n")}\n`
+      : "";
+
+  const customerCtx = input.company.customerContext;
+  const customerLines: string[] = [];
+  if (customerCtx?.registeredName) {
+    customerLines.push(`- Nome cadastrado: ${customerCtx.registeredName}`);
+  }
+  if (customerCtx?.lastCompletedVisit) {
+    customerLines.push(
+      `- Último atendimento concluído: ${customerCtx.lastCompletedVisit.serviceName} com ${customerCtx.lastCompletedVisit.collaboratorName} em ${customerCtx.lastCompletedVisit.localDate}`,
+    );
+  }
+  if (customerCtx?.preferredCollaboratorName) {
+    customerLines.push(
+      `- Profissional preferido: ${customerCtx.preferredCollaboratorName}`,
+    );
+  }
+  if (customerCtx?.activePackagesOrTags && customerCtx.activePackagesOrTags.length > 0) {
+    customerLines.push(
+      `- Pacotes/observações do cliente: ${customerCtx.activePackagesOrTags.join(", ")}`,
+    );
+  }
+  if (customerCtx?.todayAppointments && customerCtx.todayAppointments.length > 0) {
+    const todayList = customerCtx.todayAppointments
+      .map(
+        (appt) =>
+          `${appt.localTime} (${appt.serviceName} com ${appt.collaboratorName}, status: ${appt.status})`,
+      )
+      .join("; ");
+    customerLines.push(`- Agendamentos de hoje: ${todayList}`);
+  }
+  const customerSummary =
+    customerLines.length > 0
+      ? `\nPerfil e histórico do cliente:\n${customerLines.join("\n")}\n`
+      : "";
+
   const localNow = getLocalDateTimeParts(input.now, input.company.timezone);
   const localNowFormatted = `${localNow.dateString} ${String(localNow.hour).padStart(2, "0")}:${String(localNow.minute).padStart(2, "0")}`;
 
@@ -179,9 +248,11 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
     `Você é o assistente virtual de WhatsApp da empresa "${input.company.companyName}".`,
     `Data/hora local atual da empresa (${input.company.timezone}): ${localNowFormatted} | UTC: ${input.now.toISOString()}.`,
     `Cliente atual: ${input.client.name} (telefone: ${input.client.phone}).`,
+    customerSummary,
+    operationalSummary,
     customPrompt,
     "Regras de atendimento:",
-    "1. Responda sempre em português claro, cordial e objetivo, adequado para WhatsApp.",
+    "1. Responda sempre em português claro, cordial, curto e natural para WhatsApp.",
     "2. NUNCA invente horários livres nem confirme um agendamento ao cliente sem antes executar a ferramenta criar_agendamento e receber success: true na resposta da ferramenta. Use SEMPRE os IDs (UUIDs) exatos retornados por listar_servicos_e_profissionais.",
     "3. OBRIGATÓRIO em qualquer pedido direto de agendamento (mesmo quando o cliente já informou serviço, profissional, data e hora): chame PRIMEIRO consultar_horarios_livres (informando collaboratorId quando o cliente escolheu um profissional), confira se existe na lista retornada um slot com localDate e localTime EXATAMENTE iguais ao pedido e SOMENTE DEPOIS chame criar_agendamento copiando literalmente o startsAt, localDate e localTime desse slot (NUNCA monte um horário UTC manualmente a partir da hora local).",
     "4. PROIBIDO inventar ou escolher horário alternativo sozinho: se o horário exato pedido pelo cliente NÃO estiver livre em consultar_horarios_livres — ou se criar_agendamento retornar success: false (ex.: 'Horário já ocupado na agenda') — NÃO confirme o agendamento nem tente reservar outro horário sem autorização; informe que o horário pedido está indisponível, liste os horários livres mais próximos retornados em slots/availableSlots (usando localTime) e aguarde o cliente escolher.",
@@ -192,6 +263,8 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
     "   - Se houver exatamente 1 agendamento futuro: identifique serviço, profissional, data e hora e execute diretamente cancelar_agendamento (ou confirme/execute reagendar_agendamento após checar consultar_horarios_livres) usando o appointmentId retornado.",
     "   - Se houver mais de 1 agendamento futuro: liste os agendamentos encontrados de forma amigável (data, hora, serviço e profissional) e pergunte qual deles o cliente deseja cancelar ou alterar.",
     "   - Se não houver nenhum agendamento futuro: informe educadamente que não encontrou agendamentos ativos para este número de WhatsApp.",
+    "9. ESCOPO ESTRITO: Se o cliente falar sobre assuntos fora do escopo da barbearia/salão (política, piadas, programação, receitas, finanças, etc.), recuse educadamente em 1 frase curta e direcione de volta para agendamentos ou informações da loja.",
+    "10. TRANSBORDO HUMANO: Sempre que o cliente pedir para falar com um atendente, barbeiro, gerente ou pessoa real — ou enviar uma reclamação/assunto que exija intervenção humana — chame obrigatoriamente a ferramenta request_human_handoff e avise que um atendente vai assumir em breve.",
     "",
     "Catálogo atual (resumo):",
     servicesSummary,
@@ -206,7 +279,11 @@ export async function dispatchAiBookingToolCall(
   rawArgs: Record<string, unknown>,
   tools: AiBookingToolExecutor,
   actions: AiExecutedToolAction[],
-): Promise<{ result: unknown; converted: boolean }> {
+): Promise<{
+  result: unknown;
+  converted: boolean;
+  handoffRequested?: { reason: string } | undefined;
+}> {
   try {
     switch (toolName) {
       case "listar_servicos_e_profissionais": {
@@ -319,6 +396,27 @@ export async function dispatchAiBookingToolCall(
         return { result: data, converted: false };
       }
 
+      case "request_human_handoff": {
+        const reason =
+          String(rawArgs.reason ?? "").trim() ||
+          "Cliente solicitou atendimento humano.";
+        const data = tools.requestHumanHandoff
+          ? await tools.requestHumanHandoff({ reason })
+          : { handoff: true as const, reason };
+        actions.push({
+          tool: "request_human_handoff",
+          input: rawArgs,
+          ok: true,
+          summary: `Transbordo humano solicitado: ${data.reason}`,
+          data,
+        });
+        return {
+          result: data,
+          converted: false,
+          handoffRequested: { reason: data.reason },
+        };
+      }
+
       default:
         return {
           result: { error: `Ferramenta desconhecida: ${toolName}` },
@@ -333,7 +431,8 @@ export async function dispatchAiBookingToolCall(
       toolName === "consultar_meus_agendamentos" ||
       toolName === "criar_agendamento" ||
       toolName === "reagendar_agendamento" ||
-      toolName === "cancelar_agendamento"
+      toolName === "cancelar_agendamento" ||
+      toolName === "request_human_handoff"
     ) {
       actions.push({
         tool: toolName,

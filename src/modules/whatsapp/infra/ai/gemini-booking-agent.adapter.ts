@@ -42,13 +42,20 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
   ): Promise<AiBookingAgentOutput> {
     const actions: AiExecutedToolAction[] = [];
     let converted = false;
+    let handoffRequested: { reason: string } | undefined;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let lastUsedModel = this.model;
 
-    const contents: GeminiContent[] = input.history.map((msg) => ({
+    // Janela deslizante: envia somente as últimas 10 mensagens do histórico para controlar consumo de tokens.
+    const slidingHistory = input.history.slice(-10);
+
+    const contents: GeminiContent[] = slidingHistory.map((msg) => ({
       role: msg.direction === "INBOUND" ? "user" : "model",
       parts: [{ text: msg.content }],
     }));
 
-    const lastInHistory = input.history[input.history.length - 1];
+    const lastInHistory = slidingHistory[slidingHistory.length - 1];
     if (
       !lastInHistory ||
       lastInHistory.direction !== "INBOUND" ||
@@ -86,13 +93,16 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
               },
               contents,
               tools: [{ functionDeclarations }],
-              // Usa thinkingLevel "minimal" no Gemini 3.5 para desativar raciocínio interno excessivo e manter baixa latência (~1-2s) no chat.
+              // Usa thinkingLevel "minimal" no Gemini 3.5 e maxOutputTokens: 250 para respostas curtas e naturais de WhatsApp.
               generationConfig: {
                 thinkingConfig: { thinkingLevel: "minimal" },
                 temperature: 0.4,
+                maxOutputTokens: 250,
               },
             },
           });
+
+        lastUsedModel = usedModel;
 
         if (!response.ok) {
           const errorBody = (await response.text().catch(() => "")).slice(0, 400);
@@ -107,7 +117,14 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
               parts?: GeminiPart[];
             };
           }>;
+          usageMetadata?: {
+            promptTokenCount?: number;
+            candidatesTokenCount?: number;
+          };
         };
+
+        promptTokens += payload.usageMetadata?.promptTokenCount ?? 0;
+        completionTokens += payload.usageMetadata?.candidatesTokenCount ?? 0;
 
         const parts = payload.candidates?.[0]?.content?.parts ?? [];
         const functionCalls = parts
@@ -125,6 +142,12 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
             provider: "GEMINI",
             actions,
             converted,
+            ...(handoffRequested ? { handoffRequested } : {}),
+            usage: {
+              model: lastUsedModel,
+              promptTokens,
+              completionTokens,
+            },
           };
         }
 
@@ -139,6 +162,9 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
             actions,
           );
           if (dispatched.converted) converted = true;
+          if (dispatched.handoffRequested) {
+            handoffRequested = dispatched.handoffRequested;
+          }
 
           responseParts.push({
             functionResponse: {
@@ -162,6 +188,12 @@ export class GeminiBookingAgentAdapter implements AiBookingAgentPort {
       provider: "GEMINI",
       actions,
       converted,
+      ...(handoffRequested ? { handoffRequested } : {}),
+      usage: {
+        model: lastUsedModel,
+        promptTokens,
+        completionTokens,
+      },
     };
   }
 }

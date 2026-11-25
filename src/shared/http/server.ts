@@ -3,12 +3,12 @@ import { app } from "./App.js";
 
 const PORT = Number(process.env.PORT || 3908) 
 
-export function start(){
+export async function start() {
   try {
-    app.listen({
+    await app.listen({
       port: PORT,
-      host: "0.0.0.0"
-    })
+      host: "0.0.0.0",
+    });
 
     console.log(`Server is running on port ${PORT}`);
   } catch (error) {
@@ -17,4 +17,4 @@ export function start(){
   }
 }
 
-start()
+void start();

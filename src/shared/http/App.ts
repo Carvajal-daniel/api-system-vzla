@@ -33,6 +33,7 @@ const app = fastify({
 // Habilita CORS controlado por variável de ambiente para consumo seguro pelo frontend web.
 app.register(fastifyCors, {
   origin: getCorsOrigins() ? getCorsOrigins() : true,
+  credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 });
@@ -77,6 +78,20 @@ if (!isProduction()) {
     routePrefix: "/docs",
   });
 }
+
+app.get(
+  "/health",
+  {
+    schema: {
+      tags: ["System"],
+      summary: "Health check endpoint",
+    },
+  },
+  async () => ({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+  }),
+);
 
 app.register(authRoutes);
 app.register(ComapnyRoutes);

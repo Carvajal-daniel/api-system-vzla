@@ -38,16 +38,19 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
   ): Promise<AiBookingAgentOutput> {
     const actions: AiExecutedToolAction[] = [];
     let converted = false;
+    let handoffRequested: { reason: string } | undefined;
+
+    const slidingHistory = input.history.slice(-10);
 
     const messages: OpenAiChatMessage[] = [
       { role: "system", content: buildAiBookingSystemPrompt(input) },
-      ...input.history.map<OpenAiChatMessage>((msg) => ({
+      ...slidingHistory.map<OpenAiChatMessage>((msg) => ({
         role: msg.direction === "INBOUND" ? "user" : "assistant",
         content: msg.content,
       })),
     ];
 
-    const lastInHistory = input.history[input.history.length - 1];
+    const lastInHistory = slidingHistory[slidingHistory.length - 1];
     if (
       !lastInHistory ||
       lastInHistory.direction !== "INBOUND" ||
@@ -107,6 +110,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
           provider: "OPENAI",
           actions,
           converted,
+          ...(handoffRequested ? { handoffRequested } : {}),
         };
       }
 
@@ -133,6 +137,9 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
           actions,
         );
         if (dispatched.converted) converted = true;
+        if (dispatched.handoffRequested) {
+          handoffRequested = dispatched.handoffRequested;
+        }
 
         messages.push({
           role: "tool",
@@ -148,6 +155,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
       provider: "OPENAI",
       actions,
       converted,
+      ...(handoffRequested ? { handoffRequested } : {}),
     };
   }
 }

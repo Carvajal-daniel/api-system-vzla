@@ -12,6 +12,26 @@ export interface AiBookingCollaboratorSummary {
   serviceIds: string[];
 }
 
+export interface AiBookingOperationalRules {
+  address?: string | null;
+  googleMapsUrl?: string | null;
+  paymentMethods?: string | null;
+  delayPolicy?: string | null;
+  packageNotes?: string | null;
+}
+
+export interface AiBookingCustomerContext {
+  registeredName: string | null;
+  lastCompletedVisit?: {
+    localDate: string;
+    serviceName: string;
+    collaboratorName: string;
+  } | null;
+  preferredCollaboratorName?: string | null;
+  activePackagesOrTags?: string[];
+  todayAppointments?: AiBookingCustomerAppointment[];
+}
+
 export interface AiBookingCompanyContext {
   companyId: string;
   companyName: string;
@@ -19,6 +39,8 @@ export interface AiBookingCompanyContext {
   aiSystemPrompt: string | null;
   services: AiBookingServiceSummary[];
   collaborators: AiBookingCollaboratorSummary[];
+  operationalRules?: AiBookingOperationalRules;
+  customerContext?: AiBookingCustomerContext;
 }
 
 export interface AiBookingConversationMessage {
@@ -35,7 +57,8 @@ export interface AiExecutedToolAction {
     | "consultar_meus_agendamentos"
     | "criar_agendamento"
     | "reagendar_agendamento"
-    | "cancelar_agendamento";
+    | "cancelar_agendamento"
+    | "request_human_handoff";
   input: Record<string, unknown>;
   ok: boolean;
   summary: string;
@@ -131,6 +154,13 @@ export interface AiBookingToolExecutor {
     id: string;
     status: string;
   }>;
+
+  requestHumanHandoff?(input: {
+    reason?: string | undefined;
+  }): Promise<{
+    handoff: true;
+    reason: string;
+  }>;
 }
 
 export interface AiBookingAgentInput {
@@ -146,11 +176,19 @@ export interface AiBookingAgentInput {
   tools: AiBookingToolExecutor;
 }
 
+export interface AiBookingTokenUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+}
+
 export interface AiBookingAgentOutput {
   replyText: string;
   provider: "OPENAI" | "GEMINI" | "SIMULATED";
   actions: AiExecutedToolAction[];
   converted?: boolean | undefined;
+  handoffRequested?: { reason: string } | undefined;
+  usage?: AiBookingTokenUsage | undefined;
 }
 
 // Porta de orquestração do agente de IA de agendamento no WhatsApp.

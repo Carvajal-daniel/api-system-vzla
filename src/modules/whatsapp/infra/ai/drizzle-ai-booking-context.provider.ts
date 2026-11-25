@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { ActorContext } from "../../../../shared/auth/actor-context.js";
 import { db } from "../../../../shared/database/database.js";
 import { CreateAppointmentUseCase } from "../../../appointments/application/use-cases/create-appointment.use-case.js";
@@ -14,14 +14,18 @@ import { DrizzleAppointmentsRepository } from "../../../appointments/infra/datab
 import { DrizzleScheduleBlocksRepository } from "../../../appointments/infra/database/repositories/drizzle-schedule-blocks.repository.js";
 import { DrizzleSchedulingContextLookupRepository } from "../../../appointments/infra/database/repositories/drizzle-scheduling-context-lookup.repository.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
+import { ClientTable } from "../../../clients/infra/database/schema/clients-schema.js";
 import { CollaboratorTable } from "../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { CompanyTable } from "../../../Company/infra/database/schema/companies-schema.js";
+import { CompanySettingsTable } from "../../../Company/infra/database/schema/company-settings-schema.js";
 import { CollaboratorServiceTable } from "../../../services/infra/database/schema/collaborator-services-schema.js";
 import { ServiceTable } from "../../../services/infra/database/schema/services-schema.js";
 import type {
   AiBookingCollaboratorSummary,
   AiBookingCompanyContext,
   AiBookingCustomerAppointment,
+  AiBookingCustomerContext,
+  AiBookingOperationalRules,
   AiBookingServiceSummary,
   AiBookingToolExecutor,
 } from "../../application/ports/ai-booking-agent.port.js";
@@ -135,6 +139,188 @@ export class DrizzleAiBookingContextProvider
     };
   }
 
+  // Carrega somente regras operacionais públicas da loja (endereço, Maps, pagamento, atraso e pacotes),
+  // nunca expondo métricas financeiras internas ou comissões.
+  private async loadOperationalRules(
+    companyId: string,
+  ): Promise<AiBookingOperationalRules> {
+    const [settingsRow] = await db
+      .select({ preferences: CompanySettingsTable.preferences })
+      .from(CompanySettingsTable)
+      .where(eq(CompanySettingsTable.companyId, companyId))
+      .limit(1);
+
+    const prefs = settingsRow?.preferences;
+    if (!prefs) {
+      return {};
+    }
+
+    let formattedAddress: string | null = null;
+    if (prefs.address) {
+      if ("street" in prefs.address) {
+        const parts = [
+          [prefs.address.street, prefs.address.number].filter(Boolean).join(", "),
+          prefs.address.district,
+          [prefs.address.city, prefs.address.state].filter(Boolean).join(" - "),
+          prefs.address.postalCode,
+        ].filter((part) => Boolean(part && part.trim()));
+        formattedAddress = parts.length > 0 ? parts.join(" · ") : null;
+      } else {
+        const parts = [
+          prefs.address.addressLine,
+          prefs.address.sector,
+          [prefs.address.city, prefs.address.state].filter(Boolean).join(" - "),
+          prefs.address.referencePoint
+            ? `Ref: ${prefs.address.referencePoint}`
+            : "",
+        ].filter((part) => Boolean(part && part.trim()));
+        formattedAddress = parts.length > 0 ? parts.join(" · ") : null;
+      }
+    }
+
+    const paymentParts: string[] = [];
+    if (prefs.onlinePayment?.enabled) {
+      paymentParts.push(
+        `Pagamento online/PIX ativo (${prefs.onlinePayment.pixKeyType}${prefs.onlinePayment.depositPercentage > 0 ? `, sinal de ${prefs.onlinePayment.depositPercentage}%` : ""})`,
+      );
+    }
+
+    const delayParts: string[] = [];
+    if (prefs.onlinePayment?.noShowPolicy?.trim()) {
+      delayParts.push(prefs.onlinePayment.noShowPolicy.trim());
+    }
+    if (typeof prefs.cancelLeadTime === "number" && prefs.cancelLeadTime > 0) {
+      delayParts.push(
+        `Cancelamento permitido com antecedência mínima de ${prefs.cancelLeadTime} minutos.`,
+      );
+    }
+
+    const packageNotes = prefs.packageSales?.enabled
+      ? prefs.packageSales.notes?.trim() || "Venda de pacotes/assinaturas disponível na loja."
+      : null;
+
+    return {
+      address: formattedAddress,
+      googleMapsUrl: prefs.googleMapsUrl ?? null,
+      paymentMethods: paymentParts.length > 0 ? paymentParts.join(" | ") : null,
+      delayPolicy: delayParts.length > 0 ? delayParts.join(" ") : null,
+      packageNotes,
+    };
+  }
+
+  // Carrega o perfil operacional e histórico do cliente (sem valores gastos ou dados financeiros internos),
+  // isolado estritamente por companyId e telefone normalizado.
+  private async loadCustomerContext(params: {
+    companyId: string;
+    customerPhone: string;
+    timezone: string;
+    now: Date;
+  }): Promise<AiBookingCustomerContext> {
+    const phoneVariants = buildNormalizedPhoneDigitVariants(params.customerPhone);
+    if (phoneVariants.length === 0) {
+      return { registeredName: null };
+    }
+
+    const phoneMatcher = inArray(
+      sql`regexp_replace(${AppointmentTable.clientPhone}, '\\D', '', 'g')`,
+      phoneVariants,
+    );
+    const clientPhoneMatcher = inArray(
+      sql`regexp_replace(${ClientTable.phone}, '\\D', '', 'g')`,
+      phoneVariants,
+    );
+
+    const [clientRows, completedRows, upcomingResult] = await Promise.all([
+      db
+        .select({
+          name: ClientTable.name,
+          tags: ClientTable.tags,
+        })
+        .from(ClientTable)
+        .where(
+          and(eq(ClientTable.companyId, params.companyId), clientPhoneMatcher),
+        )
+        .limit(1),
+      db
+        .select({
+          serviceName: AppointmentTable.serviceNameSnapshot,
+          collaboratorName: CollaboratorTable.name,
+          startsAt: AppointmentTable.startsAt,
+        })
+        .from(AppointmentTable)
+        .innerJoin(
+          CollaboratorTable,
+          and(
+            eq(AppointmentTable.collaboratorId, CollaboratorTable.id),
+            eq(AppointmentTable.companyId, CollaboratorTable.companyId),
+          ),
+        )
+        .where(
+          and(
+            eq(AppointmentTable.companyId, params.companyId),
+            eq(AppointmentTable.status, "COMPLETED"),
+            phoneMatcher,
+          ),
+        )
+        .orderBy(desc(AppointmentTable.startsAt))
+        .limit(20),
+      this.listCustomerUpcomingAppointments({
+        companyId: params.companyId,
+        customerPhone: params.customerPhone,
+        timezone: params.timezone,
+        // Retrocede 2h para incluir agendamentos de hoje em caso de atraso do cliente.
+        now: new Date(params.now.getTime() - 2 * 60 * 60 * 1000),
+      }),
+    ]);
+
+    const clientRow = clientRows[0] ?? null;
+    const lastCompleted = completedRows[0] ?? null;
+
+    let preferredCollaboratorName: string | null = null;
+    if (completedRows.length > 0) {
+      const freq = new Map<string, number>();
+      for (const row of completedRows) {
+        freq.set(row.collaboratorName, (freq.get(row.collaboratorName) ?? 0) + 1);
+      }
+      let bestCount = 0;
+      for (const [name, count] of freq.entries()) {
+        if (count > bestCount) {
+          bestCount = count;
+          preferredCollaboratorName = name;
+        }
+      }
+    }
+
+    const todayLocalDate = getLocalDateTimeParts(
+      params.now,
+      params.timezone,
+    ).dateString;
+    const todayAppointments = upcomingResult.appointments.filter(
+      (appt) => appt.localDate === todayLocalDate,
+    );
+
+    const activePackagesOrTags = (clientRow?.tags ?? []).filter(
+      (tag) => tag.trim().length > 0 && tag.toLowerCase() !== "whatsapp",
+    );
+
+    return {
+      registeredName: clientRow?.name ?? null,
+      lastCompletedVisit: lastCompleted
+        ? {
+            localDate: getLocalDateTimeParts(
+              lastCompleted.startsAt,
+              params.timezone,
+            ).dateString,
+            serviceName: lastCompleted.serviceName,
+            collaboratorName: lastCompleted.collaboratorName,
+          }
+        : null,
+      preferredCollaboratorName,
+      activePackagesOrTags,
+      todayAppointments,
+    };
+  }
+
   // Busca agendamentos futuros ativos (PENDING/CONFIRMED) do cliente na empresa, normalizando os dígitos do telefone.
   async listCustomerUpcomingAppointments(input: {
     companyId: string;
@@ -232,7 +418,17 @@ export class DrizzleAiBookingContextProvider
       return null;
     }
 
-    const catalog = await this.loadCatalog(input.companyId);
+    const now = new Date();
+    const [catalog, operationalRules, customerContext] = await Promise.all([
+      this.loadCatalog(input.companyId),
+      this.loadOperationalRules(input.companyId),
+      this.loadCustomerContext({
+        companyId: input.companyId,
+        customerPhone: input.clientPhone,
+        timezone: companyRow.timezone,
+        now,
+      }),
+    ]);
 
     const aiActor: ActorContext = {
       userId: input.companyId,
@@ -443,6 +639,11 @@ export class DrizzleAiBookingContextProvider
           status: updated.status,
         };
       },
+
+      requestHumanHandoff: async ({ reason }) => ({
+        handoff: true as const,
+        reason: reason?.trim() || "Cliente solicitou atendimento humano.",
+      }),
     };
 
     return {
@@ -453,6 +654,8 @@ export class DrizzleAiBookingContextProvider
         aiSystemPrompt: input.aiSystemPrompt,
         services: catalog.services,
         collaborators: catalog.collaborators,
+        operationalRules,
+        customerContext,
       },
       tools,
     };

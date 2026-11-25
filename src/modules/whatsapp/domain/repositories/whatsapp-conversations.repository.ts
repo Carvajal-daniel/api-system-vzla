@@ -71,4 +71,18 @@ export interface WhatsAppConversationsRepository {
     assignedMode?: WhatsAppAssignedMode | undefined;
     status?: WhatsAppConversationStatus | undefined;
   }): Promise<WhatsAppConversation | null>;
+
+  updateAiPauseState?(input: {
+    companyId: string;
+    conversationId: string;
+    aiPausedUntil: Date | null;
+    assignedMode?: WhatsAppAssignedMode | undefined;
+  }): Promise<WhatsAppConversation | null>;
+
+  updateHourlyRateLimit?(input: {
+    companyId: string;
+    conversationId: string;
+    hourlyMessageCount: number;
+    hourlyWindowStartAt: Date | null;
+  }): Promise<WhatsAppConversation | null>;
 }

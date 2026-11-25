@@ -306,4 +306,52 @@ export class DrizzleWhatsAppConversationsRepository
 
     return row ? mapRow(row) : null;
   }
+
+  async updateAiPauseState(input: {
+    companyId: string;
+    conversationId: string;
+    aiPausedUntil: Date | null;
+    assignedMode?: WhatsAppAssignedMode | undefined;
+  }): Promise<WhatsAppConversation | null> {
+    const [row] = await db
+      .update(WhatsAppConversationsTable)
+      .set({
+        aiPausedUntil: input.aiPausedUntil,
+        ...(input.assignedMode ? { assignedMode: input.assignedMode } : {}),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(WhatsAppConversationsTable.companyId, input.companyId),
+          eq(WhatsAppConversationsTable.id, input.conversationId),
+        ),
+      )
+      .returning();
+
+    return row ? mapRow(row) : null;
+  }
+
+  async updateHourlyRateLimit(input: {
+    companyId: string;
+    conversationId: string;
+    hourlyMessageCount: number;
+    hourlyWindowStartAt: Date | null;
+  }): Promise<WhatsAppConversation | null> {
+    const [row] = await db
+      .update(WhatsAppConversationsTable)
+      .set({
+        hourlyMessageCount: Math.max(0, Math.trunc(input.hourlyMessageCount)),
+        hourlyWindowStartAt: input.hourlyWindowStartAt,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(WhatsAppConversationsTable.companyId, input.companyId),
+          eq(WhatsAppConversationsTable.id, input.conversationId),
+        ),
+      )
+      .returning();
+
+    return row ? mapRow(row) : null;
+  }
 }

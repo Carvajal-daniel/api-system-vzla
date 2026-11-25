@@ -6,6 +6,9 @@ import {
   authorizeRoles,
 } from "../../../../shared/http/auth/authenticate.js";
 import { DrizzleClientsRepository } from "../../../clients/infra/database/repositories/drizzle-clients.repository.js";
+import { PlanQuotaGuardUseCase } from "../../../billing/application/use-cases/plan-quota-guard.use-case.js";
+import { DrizzleTenantUsageRepository } from "../../../billing/infra/database/repositories/drizzle-tenant-usage.repository.js";
+import { WhatsAppAiTurnOrchestrator } from "../../application/services/whatsapp-ai-turn-orchestrator.js";
 import { AnalyzeWhatsAppConversationUseCase } from "../../application/use-cases/analyze-whatsapp-conversation.use-case.js";
 import { AskBusinessCopilotUseCase } from "../../application/use-cases/ask-business-copilot.use-case.js";
 import { ConfigureDatafyWhatsAppUseCase } from "../../application/use-cases/configure-datafy-whatsapp.use-case.js";
@@ -15,11 +18,14 @@ import { GetWhatsAppConnectionUseCase } from "../../application/use-cases/get-wh
 import { GetWhatsAppConversationMessagesUseCase } from "../../application/use-cases/get-whatsapp-conversation-messages.use-case.js";
 import { GetWhatsAppIntelligenceSummaryUseCase } from "../../application/use-cases/get-whatsapp-intelligence-summary.use-case.js";
 import { ListWhatsAppConversationsUseCase } from "../../application/use-cases/list-whatsapp-conversations.use-case.js";
+import { ManageWhatsAppConversationAiPauseUseCase } from "../../application/use-cases/manage-whatsapp-conversation-ai-pause.use-case.js";
 import { ProcessInboundWhatsAppMessageUseCase } from "../../application/use-cases/process-inbound-whatsapp-message.use-case.js";
+import { ProcessPostVisitNpsUseCase } from "../../application/use-cases/process-post-visit-nps.use-case.js";
 import { SendOwnerWhatsAppMessageUseCase } from "../../application/use-cases/send-owner-whatsapp-message.use-case.js";
 import { SendWhatsAppFollowupUseCase } from "../../application/use-cases/send-whatsapp-followup.use-case.js";
 import { UpdateWhatsAppConversationModeUseCase } from "../../application/use-cases/update-whatsapp-conversation-mode.use-case.js";
 import { UpdateWhatsAppSettingsUseCase } from "../../application/use-cases/update-whatsapp-settings.use-case.js";
+import { WhatsAppGatewayRouter as HybridWhatsAppGatewayRouter } from "../adapters/whatsapp/whatsapp-gateway.router.js";
 import { ResilientBusinessCopilotAdapter } from "../ai/business-copilot.adapter.js";
 import { ResilientConversationAnalyzerAdapter } from "../ai/conversation-analyzer.adapter.js";
 import { createAiBookingAgentAdapter } from "../ai/create-ai-booking-agent.js";
@@ -28,6 +34,9 @@ import { DrizzleBusinessMetricsProvider } from "../ai/drizzle-business-metrics.p
 import { AesSecretCipher } from "../crypto/aes-secret-cipher.js";
 import { DrizzleAiConversationInsightsRepository } from "../database/repositories/drizzle-ai-conversation-insights.repository.js";
 import { DrizzleCompanyWhatsAppConnectionRepository } from "../database/repositories/drizzle-company-whatsapp-connection.repository.js";
+import { DrizzlePostVisitNpsRepository } from "../database/repositories/drizzle-post-visit-nps.repository.js";
+import { DrizzleProactiveInsightsWriter } from "../database/repositories/drizzle-proactive-insights.writer.js";
+import { DrizzleTenantWhatsAppChannelsRepository } from "../database/repositories/drizzle-tenant-whatsapp-channels.repository.js";
 import { DrizzleWhatsAppConversationsRepository } from "../database/repositories/drizzle-whatsapp-conversations.repository.js";
 import { DrizzleWhatsAppMessagesRepository } from "../database/repositories/drizzle-whatsapp-messages.repository.js";
 import { DatafyWhatsAppAdapter } from "../whatsapp/datafy-whatsapp.adapter.js";
@@ -67,6 +76,10 @@ const sendOwnerMessageBodySchema = z.object({
 
 const updateModeBodySchema = z.object({
   assignedMode: z.enum(["AI_AUTOPILOT", "HUMAN"]),
+});
+
+const pauseAiBodySchema = z.object({
+  durationMinutes: z.coerce.number().int().min(1).max(43_200).optional(),
 });
 
 const simulatorInboundBodySchema = z.object({
@@ -220,6 +233,28 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     () => evolutionAdapter.getMode(),
   );
 
+  const tenantUsageRepository = new DrizzleTenantUsageRepository();
+  const planQuotaGuard = new PlanQuotaGuardUseCase(tenantUsageRepository);
+  const tenantChannelsRepository = new DrizzleTenantWhatsAppChannelsRepository();
+  const hybridGatewayRouter = new HybridWhatsAppGatewayRouter(
+    tenantChannelsRepository,
+  );
+  const turnOrchestrator = new WhatsAppAiTurnOrchestrator(hybridGatewayRouter);
+  const proactiveInsightsWriter = new DrizzleProactiveInsightsWriter();
+  const postVisitNpsRepository = new DrizzlePostVisitNpsRepository();
+  const processPostVisitNpsUseCase = new ProcessPostVisitNpsUseCase(
+    postVisitNpsRepository,
+    conversationsRepository,
+    messagesRepository,
+    hybridGatewayRouter,
+    planQuotaGuard,
+    proactiveInsightsWriter,
+  );
+
+  app.addHook("onClose", async () => {
+    turnOrchestrator.dispose();
+  });
+
   const processInboundUseCase = new ProcessInboundWhatsAppMessageUseCase(
     clientsRepository,
     connectionRepository,
@@ -229,6 +264,13 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     aiContextProvider,
     gatewayRouter,
     analyzeConversationUseCase,
+    {
+      planQuotaGuard,
+      whatsappGateway: hybridGatewayRouter,
+      turnOrchestrator,
+      proactiveInsightsWriter,
+      npsReplyHandler: processPostVisitNpsUseCase,
+    },
   );
   const listConversationsUseCase = new ListWhatsAppConversationsUseCase(
     conversationsRepository,
@@ -246,6 +288,10 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
   );
   const updateConversationModeUseCase =
     new UpdateWhatsAppConversationModeUseCase(conversationsRepository);
+  const manageAiPauseUseCase = new ManageWhatsAppConversationAiPauseUseCase(
+    conversationsRepository,
+    turnOrchestrator,
+  );
 
   // =========================================================================
   // Bloco 1: Conexão Evolution / Datafy e configurações de IA
@@ -528,6 +574,68 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
         companyId: request.actor!.companyId,
         conversationId: id,
         assignedMode: body.assignedMode,
+      });
+    },
+  );
+
+  app.post(
+    "/v1/whatsapp/conversations/:id/pause-ai",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["WhatsApp (Owner)"],
+        summary:
+          "Pause WhatsApp AI autopilot for a conversation (human handoff)",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+          },
+        },
+        body: {
+          type: "object",
+          properties: {
+            durationMinutes: { type: "integer", minimum: 1, maximum: 43200 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { id } = conversationIdParamSchema.parse(request.params);
+      const body = pauseAiBodySchema.parse(request.body ?? {});
+      return manageAiPauseUseCase.pauseAi({
+        companyId: request.actor!.companyId,
+        conversationId: id,
+        durationMinutes: body.durationMinutes,
+      });
+    },
+  );
+
+  app.post(
+    "/v1/whatsapp/conversations/:id/resume-ai",
+    {
+      preHandler: ownerGuard,
+      schema: {
+        tags: ["WhatsApp (Owner)"],
+        summary:
+          "Clear AI pause and reactivate WhatsApp AI autopilot for a conversation",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { id } = conversationIdParamSchema.parse(request.params);
+      return manageAiPauseUseCase.resumeAi({
+        companyId: request.actor!.companyId,
+        conversationId: id,
       });
     },
   );
