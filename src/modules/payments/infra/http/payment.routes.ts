@@ -276,6 +276,43 @@ export async function paymentRoutes(app: FastifyInstance, options?: { repository
     return reply.code(201).send(result);
   });
 
+  app.post("/payments/onboarding/asaas/connect-existing", {
+    ...owner,
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Connect an existing Asaas account using only the API Key (validates via /v3/myAccount and auto-registers webhook)",
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: "object",
+        required: ["apiKey"],
+        properties: {
+          apiKey: { type: "string", minLength: 12, maxLength: 1000 },
+          staticPixKey: { type: ["string", "null"], maxLength: 77 },
+        },
+      },
+      response: {
+        200: {
+          type: "object",
+          required: ["provider", "connected", "accountLabel", "walletId"],
+          properties: {
+            provider: { type: "string", enum: ["ASAAS"] },
+            connected: { type: "boolean" },
+            accountLabel: { type: "string" },
+            walletId: { type: ["string", "null"] },
+          },
+        },
+        400: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } },
+        422: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } },
+      },
+    },
+  }, async (request) => {
+    const payload = z.object({
+      apiKey: z.string().trim().min(12).max(1000),
+      staticPixKey: z.string().trim().regex(/^[!-~]{1,77}$/).nullable().optional(),
+    }).parse(request.body);
+    return repository.connectExistingAsaas(request.actor!.companyId, payload);
+  });
+
   app.post("/payments/pix", owner, async (request, reply) => {
     const payload = z.object({
       referenceType: z.enum(chargeReferences), referenceId: z.uuid(), clientId: z.uuid(),
@@ -290,6 +327,25 @@ export async function paymentRoutes(app: FastifyInstance, options?: { repository
     app.post("/payments/:id/simulate-confirmation", owner, async (request) =>
       repository.simulate(request.actor!.companyId, id.parse(request.params).id));
   }
+
+  const handleAsaasWebhook = async (request: { body: unknown; headers: Record<string, unknown> }) => {
+    const envelope = webhookEnvelope.parse(request.body);
+    if (envelope.event !== "PAYMENT_RECEIVED" && envelope.event !== "PAYMENT_CONFIRMED") return { processed: false };
+    const token = request.headers["asaas-access-token"];
+    if (typeof token !== "string" || !token) throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
+    const payment = asaasPayment.safeParse(envelope.payment);
+    if (!payment.success) return { processed: false };
+    const data = payment.data;
+    return repository.settleAsaas({
+      eventId: envelope.id, externalId: data.id, externalSubscriptionId: data.subscription ?? undefined,
+      staticQrCodeId: data.pixQrCodeId ?? undefined, reference: data.externalReference ?? undefined,
+      amountCents: Math.round(data.value * 100), method: data.billingType,
+      paidAt: eventTimestamp([data.confirmedDate, data.paymentDate, envelope.dateCreated]),
+      dueDate: data.originalDueDate ?? data.dueDate,
+    }, token);
+  };
+
+  app.post("/payments/webhooks/asaas", async (request) => handleAsaasWebhook(request));
 
   app.post("/webhooks/payments/:provider", async (request) => {
     const { provider } = z.object({ provider: z.string().toUpperCase() }).parse(request.params);
@@ -306,19 +362,6 @@ export async function paymentRoutes(app: FastifyInstance, options?: { repository
       return repository.settleMercadoPago(type, { resourceId, requestId, signature }, companyId);
     }
     if (provider !== "ASAAS") throw new PaymentError("Provedor de webhook inválido.", "NOT_FOUND", "PAYMENT_PROVIDER_NOT_FOUND");
-    const envelope = webhookEnvelope.parse(request.body);
-    if (envelope.event !== "PAYMENT_RECEIVED" && envelope.event !== "PAYMENT_CONFIRMED") return { processed: false };
-    const token = request.headers["asaas-access-token"];
-    if (typeof token !== "string" || !token) throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
-    const payment = asaasPayment.safeParse(envelope.payment);
-    if (!payment.success) return { processed: false };
-    const data = payment.data;
-    return repository.settleAsaas({
-      eventId: envelope.id, externalId: data.id, externalSubscriptionId: data.subscription ?? undefined,
-      staticQrCodeId: data.pixQrCodeId ?? undefined, reference: data.externalReference ?? undefined,
-      amountCents: Math.round(data.value * 100), method: data.billingType,
-      paidAt: eventTimestamp([data.confirmedDate, data.paymentDate, envelope.dateCreated]),
-      dueDate: data.originalDueDate ?? data.dueDate,
-    }, token);
+    return handleAsaasWebhook(request);
   });
 }

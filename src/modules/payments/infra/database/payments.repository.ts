@@ -18,7 +18,13 @@ import { FinancialDocumentTable, ReceiptTable } from "../../../finance/infra/dat
 import { FinanceOrderPaymentTable, FinanceOrderTable } from "../../../finance/infra/database/schema/orders-schema.js";
 import type { ChargeReference, GatewayPaymentEvent, PaymentGatewayPort, PaymentProvider, SubscriptionMethod, WebhookSignatureContext } from "../../domain/payment-gateway.js";
 import { missingPaymentResource, nextMonthlyDate, paymentConflict } from "../../domain/payment-policy.js";
-import { AsaasPaymentAdapter, createAsaasSubaccount, type AsaasSubaccountInput } from "../gateways/asaas-payment.adapter.js";
+import {
+  AsaasPaymentAdapter,
+  createAsaasSubaccount,
+  registerAsaasWebhook,
+  validateAsaasAccount,
+  type AsaasSubaccountInput,
+} from "../gateways/asaas-payment.adapter.js";
 import {
   buildMercadoPagoAuthorizeUrl,
   exchangeMercadoPagoOAuthCode,
@@ -319,9 +325,15 @@ export class PaymentsRepository {
       const previous = await configuration(tx, companyId);
       const sameProvider = input.paymentProvider === previous.paymentProvider;
       const credential = input.providerApiKey ? encryptPaymentSecret(input.providerApiKey) : sameProvider ? previous.providerApiKeyEncrypted : null;
-      const webhook = input.webhookToken ? encryptPaymentSecret(input.webhookToken) : sameProvider ? previous.webhookTokenEncrypted : null;
-      if (input.paymentProvider === "ASAAS" && (!credential || !webhook)) {
-        throw new PaymentError("Informe a chave da API e o token exclusivo do webhook.", "VALIDATION", "ASAAS_CREDENTIALS_REQUIRED");
+      const webhook = input.webhookToken
+        ? encryptPaymentSecret(input.webhookToken)
+        : sameProvider && previous.webhookTokenEncrypted
+          ? previous.webhookTokenEncrypted
+          : input.paymentProvider === "ASAAS"
+            ? encryptPaymentSecret(randomUUID())
+            : null;
+      if (input.paymentProvider === "ASAAS" && !credential) {
+        throw new PaymentError("Informe a API Key do Asaas.", "VALIDATION", "ASAAS_CREDENTIALS_REQUIRED");
       }
       if (input.paymentProvider === "MERCADO_PAGO" && (!credential || !webhook)) {
         throw new PaymentError("Informe o Access Token e a chave secreta do webhook do Mercado Pago.", "VALIDATION", "MERCADO_PAGO_CREDENTIALS_REQUIRED");
@@ -526,6 +538,62 @@ export class PaymentsRepository {
       connected: true,
       accountLabel: created.accountLabel,
       walletId: created.walletId,
+    };
+  }
+
+  // Conecta uma conta Asaas existente usando apenas a API Key: valida via GET /v3/myAccount,
+  // gera webhookToken seguro no servidor e registra o webhook automaticamente quando API_PUBLIC_URL é pública.
+  async connectExistingAsaas(
+    companyId: string,
+    input: { apiKey: string; staticPixKey?: string | null | undefined },
+  ) {
+    const trimmedApiKey = input.apiKey.trim();
+    const account = await validateAsaasAccount(trimmedApiKey, this.transport);
+    const webhookToken = randomUUID();
+
+    await db.transaction(async (tx) => {
+      await lockTenant(tx, companyId);
+      await tenant(tx, companyId);
+      const previous = await configuration(tx, companyId);
+
+      const nextConfig: Config = {
+        companyId,
+        paymentProvider: "ASAAS",
+        providerApiKeyEncrypted: encryptPaymentSecret(trimmedApiKey),
+        webhookTokenEncrypted: encryptPaymentSecret(webhookToken),
+        staticPixKey: input.staticPixKey === undefined ? previous.staticPixKey : input.staticPixKey,
+        providerRefreshTokenEncrypted: null,
+        providerTokenExpiresAt: null,
+        providerPublicKey: null,
+        providerAccountId: account.accountId,
+        providerWalletId: account.walletId,
+        providerAccountLabel: account.accountLabel,
+      };
+
+      await tx.insert(CompanyPaymentConfigTable).values(nextConfig).onConflictDoUpdate({
+        target: CompanyPaymentConfigTable.companyId,
+        set: nextConfig,
+      });
+    });
+
+    const apiPublicUrl = process.env.API_PUBLIC_URL?.trim().replace(/\/+$/, "");
+    if (apiPublicUrl) {
+      await registerAsaasWebhook(
+        trimmedApiKey,
+        {
+          url: `${apiPublicUrl}/payments/webhooks/asaas`,
+          authToken: webhookToken,
+          email: account.email,
+        },
+        this.transport,
+      );
+    }
+
+    return {
+      provider: "ASAAS" as const,
+      connected: true,
+      accountLabel: account.accountLabel,
+      walletId: account.walletId,
     };
   }
 

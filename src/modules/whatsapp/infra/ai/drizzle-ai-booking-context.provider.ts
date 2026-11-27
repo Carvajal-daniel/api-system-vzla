@@ -22,6 +22,17 @@ import { WhatsAppConversationsTable } from "../database/schema/whatsapp-conversa
 import { CollaboratorTable } from "../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { CompanyTable } from "../../../Company/infra/database/schema/companies-schema.js";
 import { CompanySettingsTable } from "../../../Company/infra/database/schema/company-settings-schema.js";
+import {
+  evaluateSubscriptionRenewalAlert,
+  isActiveClubSubscriber,
+} from "../../../payments/domain/deposit-policy.service.js";
+import {
+  buildFlexiblePhoneMatch,
+  evaluateTenantDepositForClient,
+  findActiveClubSubscriptionByPhone,
+  loadTenantDepositPolicy,
+} from "../../../payments/infra/database/deposit-policy-lookup.js";
+import { PaymentsRepository } from "../../../payments/infra/database/payments.repository.js";
 import { CollaboratorServiceTable } from "../../../services/infra/database/schema/collaborator-services-schema.js";
 import { ServiceTable } from "../../../services/infra/database/schema/services-schema.js";
 import type {
@@ -194,6 +205,7 @@ export class DrizzleAiBookingContextProvider
     );
   private readonly updateAppointmentStatusUseCase =
     new UpdateAppointmentStatusUseCase(this.appointmentsRepository);
+  private readonly paymentsRepository = new PaymentsRepository();
 
   private async loadCatalog(companyId: string): Promise<{
     services: AiBookingServiceSummary[];
@@ -306,6 +318,7 @@ export class DrizzleAiBookingContextProvider
         return a.name.localeCompare(b.name, "pt-BR");
       });
 
+    const serviceNameById = new Map(services.map((s) => [s.id, s.name]));
     const packageSales = settingsRows[0]?.preferences?.packageSales ?? null;
     const planServices = services.filter((s) => isSubscriptionPlanService(s));
     const subscriptionPlans: AiBookingSubscriptionPlansResult = {
@@ -313,13 +326,20 @@ export class DrizzleAiBookingContextProvider
       notes: packageSales?.enabled
         ? packageSales.notes?.trim() || null
         : null,
-      plans: clubPlans.length > 0 ? clubPlans : planServices.map((s) => ({
-        id: s.id,
-        name: s.name,
-        description: s.description ?? null,
-        priceInCents: s.priceInCents,
-        durationMinutes: s.durationMinutes,
-      })),
+      plans: clubPlans.length > 0
+        ? clubPlans.map((plan) => ({
+            ...plan,
+            includedServiceNames: (plan.includedServiceIds ?? [])
+              .map((serviceId) => serviceNameById.get(serviceId))
+              .filter((name): name is string => Boolean(name)),
+          }))
+        : planServices.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description ?? null,
+            priceInCents: s.priceInCents,
+            durationMinutes: s.durationMinutes,
+          })),
     };
 
     return {
@@ -404,19 +424,22 @@ export class DrizzleAiBookingContextProvider
     };
   }
 
-  // Carrega o perfil operacional e histórico do cliente (sem valores gastos ou dados financeiros internos),
-  // Isola o histórico por companyId e pelo telefone completo do remetente.
+  // Carrega o perfil operacional, status do Clube VIP e histórico do cliente (matching flexível de 10/11 dígitos),
+  // isolando estritamente por companyId sem expor métricas financeiras internas.
   private async loadCustomerContext(params: {
     companyId: string;
     pushName?: string | null | undefined;
     customerPhone: string;
     timezone: string;
     now: Date;
+    servicesById: ReadonlyMap<string, string>;
   }): Promise<AiBookingCustomerContext> {
     const phone = normalizeCustomerPhone(params.customerPhone);
     if (!phone) {
       return {
         isNewCustomer: true,
+        isSubscriber: false,
+        subscription: null,
         totalVisits: 0,
         registeredName: sanitizeCustomerName(params.pushName),
       };
@@ -435,7 +458,7 @@ export class DrizzleAiBookingContextProvider
       phone,
     );
 
-    const [clientRows, conversationRows, historyRows, upcomingResult] =
+    const [clientRows, conversationRows, historyRows, upcomingResult, clubSubscription] =
       await Promise.all([
         db
           .select({
@@ -491,6 +514,7 @@ export class DrizzleAiBookingContextProvider
           // Retrocede 2h para incluir agendamentos de hoje em caso de atraso do cliente.
           now: new Date(params.now.getTime() - 2 * 60 * 60 * 1000),
         }),
+        findActiveClubSubscriptionByPhone(params.companyId, params.customerPhone, params.now),
       ]);
 
     const validClientName =
@@ -553,8 +577,38 @@ export class DrizzleAiBookingContextProvider
     }
     const activePackagesOrTags = Array.from(tagSet);
 
+    const activeSub = isActiveClubSubscriber(clubSubscription, params.now);
+    const renewalAlert = evaluateSubscriptionRenewalAlert(clubSubscription, params.now, 5);
+    const remainingUses =
+      clubSubscription && clubSubscription.maxMonthlyUses !== null
+        ? Math.max(0, clubSubscription.maxMonthlyUses - clubSubscription.usedThisPeriod)
+        : null;
+
     return {
-      isNewCustomer: historySummary.isNewCustomer,
+      isNewCustomer: !activeSub && historySummary.isNewCustomer,
+      isSubscriber: activeSub,
+      subscription:
+        activeSub && clubSubscription
+          ? {
+              subscriptionId: clubSubscription.subscriptionId,
+              planId: clubSubscription.planId,
+              planName: clubSubscription.planName,
+              status: clubSubscription.status,
+              includedServiceIds: clubSubscription.includedServiceIds,
+              includedServiceNames: clubSubscription.includedServiceIds
+                .map((id) => params.servicesById.get(id))
+                .filter((name): name is string => Boolean(name)),
+              allowedDaysOfWeek: clubSubscription.allowedDaysOfWeek,
+              maxMonthlyUses: clubSubscription.maxMonthlyUses,
+              remainingUses,
+              currentPeriodEnd: clubSubscription.currentPeriodEnd
+                ? clubSubscription.currentPeriodEnd.toISOString()
+                : null,
+              daysUntilRenewal: renewalAlert.daysUntilRenewal,
+              inGracePeriod: renewalAlert.inGracePeriod,
+              needsRenewalAlert: renewalAlert.needsRenewalAlert,
+            }
+          : null,
       totalVisits: historySummary.totalVisits,
       registeredName: effectiveName,
       mostFrequentServiceName: historySummary.mostFrequentServiceName,
@@ -664,17 +718,63 @@ export class DrizzleAiBookingContextProvider
     }
 
     const now = new Date();
-    const [catalog, operationalRules, customerContext] = await Promise.all([
+    const [catalog, operationalRules, depositPolicy] = await Promise.all([
       this.loadCatalog(companyId),
       this.loadOperationalRules(companyId),
-      this.loadCustomerContext({
-        companyId,
-        pushName: clientName,
-        customerPhone: clientPhone,
-        timezone: companyRow.timezone,
-        now,
-      }),
+      loadTenantDepositPolicy(companyId),
     ]);
+    const servicesById = new Map(catalog.services.map((s) => [s.id, s.name]));
+    const customerContext = await this.loadCustomerContext({
+      companyId,
+      pushName: clientName,
+      customerPhone: clientPhone,
+      timezone: companyRow.timezone,
+      now,
+      servicesById,
+    });
+
+    const ensureClientRecord = async (fallbackName: string) => {
+      const [existing] = await db
+        .select({ id: ClientTable.id, name: ClientTable.name, phone: ClientTable.phone })
+        .from(ClientTable)
+        .where(
+          and(
+            eq(ClientTable.companyId, companyId),
+            buildFlexiblePhoneMatch(ClientTable.phone, clientPhone),
+          ),
+        )
+        .limit(1);
+      if (existing) return existing;
+
+      const normalizedPhone = Phone.create(clientPhone).value;
+      const [inserted] = await db
+        .insert(ClientTable)
+        .values({
+          companyId,
+          name: fallbackName,
+          phone: normalizedPhone,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing({ target: [ClientTable.companyId, ClientTable.phone] })
+        .returning({ id: ClientTable.id, name: ClientTable.name, phone: ClientTable.phone });
+      if (inserted) return inserted;
+
+      const [concurrent] = await db
+        .select({ id: ClientTable.id, name: ClientTable.name, phone: ClientTable.phone })
+        .from(ClientTable)
+        .where(
+          and(
+            eq(ClientTable.companyId, companyId),
+            buildFlexiblePhoneMatch(ClientTable.phone, clientPhone),
+          ),
+        )
+        .limit(1);
+      if (!concurrent) {
+        throw new Error("Não foi possível identificar ou cadastrar o cliente.");
+      }
+      return concurrent;
+    };
 
     const customerPhone = normalizeCustomerPhone(clientPhone);
     const requireCustomerAppointment = async (appointmentId: string) => {
@@ -782,6 +882,7 @@ export class DrizzleAiBookingContextProvider
         notes,
         isGuest,
         payFullPrice,
+        document,
       }) => {
         const normalizedCollaboratorId = collaboratorId.trim();
         const parsedStartsAt = parseStartsAtInCompanyTimezone(startsAt);
@@ -816,6 +917,21 @@ export class DrizzleAiBookingContextProvider
           }));
         };
 
+        const effectiveClientName =
+          sanitizeCustomerName(clientName) ??
+          resolvedCustomerName ??
+          `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`;
+
+        // Consulta a regra única de sinal anti-no-show: assinantes ativos do Clube VIP são sempre isentos.
+        const matchedService = catalog.services.find((s) => s.id === serviceId);
+        const depositCheck = await evaluateTenantDepositForClient({
+          companyId,
+          clientPhone,
+          servicePriceInCents: matchedService?.priceInCents ?? 0,
+        });
+        const requiresDeposit =
+          depositCheck.evaluation.requiresDeposit && depositCheck.policy.hasActivePaymentProvider;
+
         try {
           const created = await this.createAppointmentUseCase.executeInternal({
             actor: aiActor,
@@ -823,28 +939,92 @@ export class DrizzleAiBookingContextProvider
             serviceId,
             collaboratorId: normalizedCollaboratorId,
             startsAt: parsedStartsAt,
-            clientName:
-              sanitizeCustomerName(clientName) ??
-              resolvedCustomerName ??
-              `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`,
+            clientName: effectiveClientName,
             clientPhone,
             isGuest,
             payFullPrice,
             notes: notes?.trim() || "Agendado via WhatsApp IA",
-            initialStatus: "CONFIRMED",
+            initialStatus: requiresDeposit ? "PENDING" : "CONFIRMED",
           });
 
-          return {
-            success: true,
-            id: created.id,
-            startsAt: created.startsAt,
-            endsAt: created.endsAt,
-            ...formatLocalSlot(created.startsAt),
-            servicePriceInCents: created.servicePriceInCentsSnapshot,
-            status: created.status,
-            serviceName: created.serviceNameSnapshot,
-            collaboratorId: created.collaboratorId,
-          };
+          if (!requiresDeposit) {
+            return {
+              success: true,
+              id: created.id,
+              startsAt: created.startsAt,
+              endsAt: created.endsAt,
+              ...formatLocalSlot(created.startsAt),
+              servicePriceInCents: created.servicePriceInCentsSnapshot,
+              status: created.status,
+              serviceName: created.serviceNameSnapshot,
+              collaboratorId: created.collaboratorId,
+              coveredByClub: created.usesClubBenefit,
+              requiresDeposit: false,
+              depositAmountCents: 0,
+              payment: null,
+            };
+          }
+
+          try {
+            const clientRecord = await ensureClientRecord(effectiveClientName);
+            const charge = await this.paymentsRepository.createPix(companyId, {
+              referenceType: "APPOINTMENT_DEPOSIT",
+              referenceId: created.id,
+              clientId: clientRecord.id,
+              amountCents: depositCheck.evaluation.depositAmountCents,
+              document,
+            });
+            return {
+              success: true,
+              id: created.id,
+              startsAt: created.startsAt,
+              endsAt: created.endsAt,
+              ...formatLocalSlot(created.startsAt),
+              servicePriceInCents: created.servicePriceInCentsSnapshot,
+              status: created.status,
+              serviceName: created.serviceNameSnapshot,
+              collaboratorId: created.collaboratorId,
+              coveredByClub: false,
+              requiresDeposit: true,
+              depositAmountCents: charge.amountCents,
+              payment: {
+                paymentId: charge.id,
+                amountCents: charge.amountCents,
+                status: charge.status,
+                pixCopyPaste: charge.pixCopyPaste ?? null,
+                checkoutUrl: null,
+                expiresAt: charge.expiresAt ? charge.expiresAt.toISOString() : null,
+              },
+            };
+          } catch (paymentError) {
+            // Libera a pré-reserva PENDING caso a geração do Pix do sinal falhe.
+            await this.updateAppointmentStatusUseCase
+              .execute({
+                actor: aiActor,
+                actorSource: "WHATSAPP_AI",
+                appointmentId: created.id,
+                status: "CANCELED",
+                cancellationReason: "Falha ao gerar cobrança Pix do sinal via WhatsApp IA.",
+              })
+              .catch(() => undefined);
+
+            const errMessage =
+              paymentError instanceof Error
+                ? paymentError.message
+                : "Não foi possível gerar o pagamento do sinal.";
+            return {
+              success: false,
+              code:
+                typeof paymentError === "object" &&
+                paymentError !== null &&
+                "reasonCode" in paymentError &&
+                typeof paymentError.reasonCode === "string"
+                  ? paymentError.reasonCode
+                  : "DEPOSIT_PAYMENT_FAILED",
+              error: errMessage,
+              availableSlots: [],
+            };
+          }
         } catch (error) {
           if (error instanceof AppointmentPolicyError) return {
             success: false,
@@ -864,6 +1044,146 @@ export class DrizzleAiBookingContextProvider
           }
           throw error;
         }
+      },
+
+      createClubPayment: async ({ action, planId, paymentMethod, document }) => {
+        if (!depositPolicy.hasActivePaymentProvider) {
+          return {
+            ok: false,
+            code: "PAYMENT_PROVIDER_UNAVAILABLE",
+            message:
+              "O pagamento online ainda não está configurado nesta barbearia. Posso te encaminhar para a equipe concluir sua assinatura.",
+          };
+        }
+
+        const effectiveClientName =
+          resolvedCustomerName ??
+          `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`;
+        const clientRecord = await ensureClientRecord(effectiveClientName);
+
+        try {
+          if (action === "RENEW") {
+            const currentSub = await findActiveClubSubscriptionByPhone(companyId, clientPhone, new Date());
+            if (!currentSub || currentSub.subscriptionId.startsWith("legacy:")) {
+              return {
+                ok: false,
+                code: "SUBSCRIPTION_NOT_FOUND",
+                message: "Não encontrei uma assinatura digital vinculada para renovação automática.",
+              };
+            }
+            if (currentSub.checkoutUrl && paymentMethod === "CREDIT_CARD") {
+              return {
+                ok: true,
+                subscriptionId: currentSub.subscriptionId,
+                payment: {
+                  paymentId: null,
+                  amountCents: currentSub.priceCents ?? 0,
+                  status: "PENDING",
+                  pixCopyPaste: null,
+                  checkoutUrl: currentSub.checkoutUrl,
+                  expiresAt: null,
+                },
+                message: "Link de renovação da assinatura gerado com sucesso.",
+              };
+            }
+            const charge = await this.paymentsRepository.createPix(companyId, {
+              referenceType: "SUBSCRIPTION",
+              referenceId: currentSub.subscriptionId,
+              clientId: clientRecord.id,
+              document,
+            });
+            return {
+              ok: true,
+              subscriptionId: currentSub.subscriptionId,
+              payment: {
+                paymentId: charge.id,
+                amountCents: charge.amountCents,
+                status: charge.status,
+                pixCopyPaste: charge.pixCopyPaste ?? null,
+                checkoutUrl: currentSub.checkoutUrl ?? null,
+                expiresAt: charge.expiresAt ? charge.expiresAt.toISOString() : null,
+              },
+              message: "Cobrança Pix de renovação do Clube VIP gerada com sucesso.",
+            };
+          }
+
+          if (!planId) {
+            return {
+              ok: false,
+              code: "PLAN_ID_REQUIRED",
+              message: "Informe qual plano do Clube VIP deseja assinar.",
+            };
+          }
+
+          const subscription = await this.paymentsRepository.enroll(companyId, {
+            clientId: clientRecord.id,
+            planId,
+            paymentMethod,
+            document,
+          });
+
+          if (subscription.paymentProvider === "MERCADO_PAGO" || paymentMethod === "CREDIT_CARD") {
+            return {
+              ok: true,
+              subscriptionId: subscription.id,
+              payment: {
+                paymentId: null,
+                amountCents: subscription.priceCents,
+                status: subscription.status,
+                pixCopyPaste: null,
+                checkoutUrl: subscription.checkoutUrl ?? null,
+                expiresAt: null,
+              },
+              message: "Link de pagamento da assinatura gerado com sucesso.",
+            };
+          }
+
+          const charge = await this.paymentsRepository.createPix(companyId, {
+            referenceType: "SUBSCRIPTION",
+            referenceId: subscription.id,
+            clientId: clientRecord.id,
+            document,
+          });
+
+          return {
+            ok: true,
+            subscriptionId: subscription.id,
+            payment: {
+              paymentId: charge.id,
+              amountCents: charge.amountCents,
+              status: charge.status,
+              pixCopyPaste: charge.pixCopyPaste ?? null,
+              checkoutUrl: subscription.checkoutUrl ?? null,
+              expiresAt: charge.expiresAt ? charge.expiresAt.toISOString() : null,
+            },
+            message: "Código Pix para ativação do Clube VIP gerado com sucesso.",
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            code:
+              typeof error === "object" &&
+              error !== null &&
+              "reasonCode" in error &&
+              typeof error.reasonCode === "string"
+                ? error.reasonCode
+                : "CLUB_PAYMENT_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Não foi possível gerar o pagamento da assinatura agora.",
+          };
+        }
+      },
+
+      checkPaymentStatus: async ({ paymentId }) => {
+        const result = await this.paymentsRepository.status(companyId, paymentId);
+        return {
+          paymentId: result.id,
+          status: result.status,
+          paidAt: result.paidAt ? result.paidAt.toISOString() : null,
+          expiresAt: result.expiresAt ? result.expiresAt.toISOString() : null,
+        };
       },
 
       rescheduleAppointment: async ({
@@ -925,6 +1245,11 @@ export class DrizzleAiBookingContextProvider
         services: catalog.services,
         collaborators: catalog.collaborators,
         operationalRules,
+        depositPolicy: {
+          enabled: depositPolicy.enabled,
+          depositPercentage: depositPolicy.depositPercentage,
+          hasActivePaymentProvider: depositPolicy.hasActivePaymentProvider,
+        },
         customerContext: normalizedCustomerContext,
       },
       tools,

@@ -36,10 +36,131 @@ export interface AsaasSubaccountResult {
   accountLabel: string;
 }
 
-function asaasBaseUrl() {
-  return process.env.ASAAS_ENVIRONMENT === "production"
+export interface AsaasAccountInfo {
+  accountId: string | null;
+  walletId: string | null;
+  accountLabel: string;
+  email: string | null;
+  environment: "production" | "sandbox";
+}
+
+const myAccountSchema = z.object({
+  id: z.string().optional(),
+  walletId: z.string().optional(),
+  name: z.string().optional(),
+  tradingName: z.string().optional(),
+  email: z.string().optional(),
+});
+
+// Detecta automaticamente o ambiente do Asaas pelo prefixo da API Key ($aact_prod_ vs $aact_hmlg_),
+// mantendo fallback para ASAAS_ENVIRONMENT quando o prefixo não identificar o ambiente.
+export function resolveAsaasEnvironment(apiKey?: string): "production" | "sandbox" {
+  const trimmed = apiKey?.trim() ?? "";
+  if (trimmed.startsWith("$aact_prod_")) return "production";
+  if (trimmed.startsWith("$aact_hmlg_")) return "sandbox";
+  return process.env.ASAAS_ENVIRONMENT === "production" ? "production" : "sandbox";
+}
+
+function asaasBaseUrl(apiKey?: string) {
+  return resolveAsaasEnvironment(apiKey) === "production"
     ? "https://api.asaas.com/v3"
     : "https://api-sandbox.asaas.com/v3";
+}
+
+// Valida uma API Key existente do Asaas consultando GET /v3/myAccount e extraindo walletId e nome da conta.
+export async function validateAsaasAccount(
+  apiKey: string,
+  transport: typeof fetch = fetch,
+): Promise<AsaasAccountInfo> {
+  const environment = resolveAsaasEnvironment(apiKey);
+  const baseUrl = asaasBaseUrl(apiKey);
+  try {
+    const response = await transport(`${baseUrl}/myAccount`, {
+      method: "GET",
+      headers: {
+        access_token: apiKey,
+        "Content-Type": "application/json",
+        "User-Agent": "Atelier-Agenda/1.0",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (response.ok) {
+      const parsed = myAccountSchema.parse(await response.json());
+      const accountLabel =
+        parsed.tradingName?.trim() ||
+        parsed.name?.trim() ||
+        parsed.email?.trim() ||
+        (environment === "production" ? "Conta Asaas (Produção)" : "Conta Asaas (Sandbox)");
+      return {
+        accountId: parsed.id?.trim() || null,
+        walletId: parsed.walletId?.trim() || null,
+        accountLabel,
+        email: parsed.email?.trim() || null,
+        environment,
+      };
+    }
+
+    const errorPayload = await response.json().catch(() => null) as {
+      errors?: Array<{ description?: string }>;
+      message?: string;
+    } | null;
+    const gatewayMessage =
+      errorPayload?.errors?.[0]?.description?.trim() ||
+      errorPayload?.message?.trim() ||
+      "API Key do Asaas inválida ou sem permissão de acesso.";
+    throw new PaymentError(gatewayMessage, "UNPROCESSABLE_ENTITY", "ASAAS_INVALID_API_KEY");
+  } catch (error) {
+    if (error instanceof PaymentError) throw error;
+    throw new PaymentError(
+      "Não foi possível validar a API Key no Asaas. Verifique a chave e tente novamente.",
+      "UNPROCESSABLE_ENTITY",
+      "ASAAS_INVALID_API_KEY",
+    );
+  }
+}
+
+// Registra automaticamente o webhook na conta Asaas quando API_PUBLIC_URL é uma URL pública válida.
+// Ignora silenciosamente URLs locais (localhost/127.0.0.1) ou falhas não-fatais de registro.
+export async function registerAsaasWebhook(
+  apiKey: string,
+  input: { url: string; authToken: string; email?: string | null },
+  transport: typeof fetch = fetch,
+): Promise<{ registered: boolean }> {
+  try {
+    const parsedUrl = new URL(input.url);
+    const host = parsedUrl.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local")) {
+      return { registered: false };
+    }
+  } catch {
+    return { registered: false };
+  }
+
+  try {
+    const response = await transport(`${asaasBaseUrl(apiKey)}/webhooks`, {
+      method: "POST",
+      headers: {
+        access_token: apiKey,
+        "Content-Type": "application/json",
+        "User-Agent": "Atelier-Agenda/1.0",
+      },
+      body: JSON.stringify({
+        name: "Atelier Agenda — Pagamentos",
+        url: input.url,
+        ...(input.email ? { email: input.email } : {}),
+        enabled: true,
+        interrupted: false,
+        authToken: input.authToken,
+        sendType: "SEQUENTIALLY",
+        events: ["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return { registered: response.ok };
+  } catch {
+    return { registered: false };
+  }
 }
 
 // Cria subconta expressa no Asaas usando a chave mestra da plataforma, evitando cópia manual de API Key pelo dono.
@@ -49,7 +170,7 @@ export async function createAsaasSubaccount(
   transport: typeof fetch = fetch,
 ): Promise<AsaasSubaccountResult> {
   try {
-    const response = await transport(asaasBaseUrl() + "/accounts", {
+    const response = await transport(asaasBaseUrl(masterApiKey) + "/accounts", {
       method: "POST",
       headers: {
         access_token: masterApiKey,
@@ -102,8 +223,7 @@ export class AsaasPaymentAdapter implements PaymentGatewayPort {
   constructor(private readonly key: string, private readonly transport = fetch) {}
 
   private async request(path: string, body?: object, timeout = 15_000) {
-    const base = process.env.ASAAS_ENVIRONMENT === "production"
-      ? "https://api.asaas.com/v3" : "https://api-sandbox.asaas.com/v3";
+    const base = asaasBaseUrl(this.key);
     try {
       const response = await this.transport(base + path, {
         method: body ? "POST" : "GET",

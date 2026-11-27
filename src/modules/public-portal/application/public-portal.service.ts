@@ -6,6 +6,10 @@ import type { GetAvailabilityOutputDTO } from "../../appointments/application/dt
 import type { CreateAppointmentUseCase } from "../../appointments/application/use-cases/create-appointment.use-case.js";
 import type { GetAvailabilityUseCase } from "../../appointments/application/use-cases/get-availability.use-case.js";
 import { getLocalDateTimeParts } from "../../appointments/domain/services/timezone-utils.js";
+import {
+  evaluateDepositPolicy,
+  isActiveClubSubscriber,
+} from "../../payments/domain/deposit-policy.service.js";
 import type { WaitlistShift } from "../../operations/infra/database/schema/operations-schema.js";
 import type { WaitlistEntryRecord, WaitlistUseCase } from "../../operations/application/waitlist.use-case.js";
 import type { PublicCatalogServiceOutputDTO } from "../../services/application/dtos/service.dtos.js";
@@ -136,23 +140,6 @@ function isSubscriptionUsableAt(
   return true;
 }
 
-function isSubscriptionActiveNow(
-  coverage: PublicActiveSubscriptionCoverage | null,
-  now: Date,
-): boolean {
-  if (!coverage) return false;
-  if (coverage.status === "ACTIVE") return true;
-  if (
-    (coverage.status === "PAST_DUE" || coverage.status === "SUSPENDED") &&
-    coverage.currentPeriodEnd
-  ) {
-    const graceEnd =
-      coverage.currentPeriodEnd.getTime() + coverage.gracePeriodDays * 86_400_000;
-    return now.getTime() < graceEnd;
-  }
-  return false;
-}
-
 // Orquestra os fluxos públicos do portal por slug reutilizando os casos de uso existentes
 // sem duplicar regras de domínio e garantindo isolamento estrito por companyId.
 export class PublicPortalService {
@@ -236,7 +223,7 @@ export class PublicPortalService {
       this.readPort.findActiveClubCoverageByPhone(company.id, normalizedPhone, now),
     ]);
 
-    const active = isSubscriptionActiveNow(coverage, now);
+    const active = isActiveClubSubscriber(coverage, now);
     if (!active || !coverage) {
       return {
         recognized: Boolean(client),
@@ -265,7 +252,8 @@ export class PublicPortalService {
         maxMonthlyUses: coverage.maxMonthlyUses,
         remainingUses,
         exemptsServicePrice: hasRemainingQuota,
-        exemptsDeposit: hasRemainingQuota,
+        // Assinante ativo do Clube VIP é sempre isento de sinal, mesmo em serviços extras fora do plano.
+        exemptsDeposit: true,
       },
     };
   }
@@ -296,6 +284,7 @@ export class PublicPortalService {
       this.readPort.findServicePrice(company.id, input.serviceId),
     ]);
 
+    const isActiveSubscriber = isActiveClubSubscriber(coverage, now);
     const coveredByClub = isSubscriptionUsableAt(
       coverage,
       input.serviceId,
@@ -306,7 +295,7 @@ export class PublicPortalService {
 
     const depositPolicy = company.depositPolicy;
     const depositRequiredByPolicy =
-      !coveredByClub && depositPolicy.enabled && depositPolicy.depositPercentage > 0;
+      !isActiveSubscriber && depositPolicy.enabled && depositPolicy.depositPercentage > 0;
 
     // Comportamento fail-closed: se o estabelecimento exige sinal mas não há provedor online ativo,
     // rejeita antes de criar o agendamento para não furar a política anti-no-show.
@@ -314,12 +303,14 @@ export class PublicPortalService {
       throw new PublicPortalPaymentProviderUnavailableError();
     }
 
-    const depositAmountCents =
-      depositRequiredByPolicy && service?.active
-        ? Math.round((service.priceInCents * depositPolicy.depositPercentage) / 100)
-        : 0;
+    const depositEvaluation = evaluateDepositPolicy({
+      policy: depositPolicy,
+      isActiveSubscriber,
+      servicePriceInCents: service?.active ? service.priceInCents : 0,
+    });
 
-    const shouldChargeDeposit = depositRequiredByPolicy && depositAmountCents > 0;
+    const depositAmountCents = depositEvaluation.depositAmountCents;
+    const shouldChargeDeposit = depositEvaluation.requiresDeposit;
     const cancellationToken = randomBytes(32).toString("base64url");
     const cancellationDigest = createHash("sha256")
       .update(cancellationToken)

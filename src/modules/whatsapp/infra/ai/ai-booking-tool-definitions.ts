@@ -253,8 +253,54 @@ export const AI_BOOKING_TOOL_DEFINITIONS: AiToolDefinition[] = [
           type: "string",
           description: "Observação opcional do agendamento.",
         },
+        document: {
+          type: "string",
+          description: "CPF ou CNPJ do cliente (apenas dígitos) quando exigido pelo gateway para gerar o Pix do sinal.",
+        },
       },
       required: ["serviceId", "collaboratorId", "startsAt", "localDate", "localTime"],
+    },
+  },
+  {
+    name: "gerar_pagamento_clube",
+    description:
+      "Gera o link de pagamento ou código Pix Copia e Cola para assinar um plano do Clube VIP (action: SUBSCRIBE) ou renovar a assinatura atual do cliente (action: RENEW) via PIX ou CREDIT_CARD.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "SUBSCRIBE para nova assinatura ou RENEW para renovação da assinatura atual.",
+        },
+        planId: {
+          type: "string",
+          description: "UUID do plano escolhido (obrigatório quando action for SUBSCRIBE).",
+        },
+        paymentMethod: {
+          type: "string",
+          description: "Forma de pagamento escolhida pelo cliente: PIX ou CREDIT_CARD.",
+        },
+        document: {
+          type: "string",
+          description: "CPF ou CNPJ do cliente (apenas dígitos) quando exigido pelo gateway.",
+        },
+      },
+      required: ["action", "paymentMethod"],
+    },
+  },
+  {
+    name: "verificar_status_pagamento",
+    description:
+      "Consulta no banco/gateway se uma cobrança Pix ou assinatura gerada na conversa já foi compensada e confirmada.",
+    parameters: {
+      type: "object",
+      properties: {
+        paymentId: {
+          type: "string",
+          description: "UUID da cobrança retornado por criar_agendamento ou gerar_pagamento_clube.",
+        },
+      },
+      required: ["paymentId"],
     },
   },
   {
@@ -320,19 +366,32 @@ export const AI_BOOKING_TOOL_DEFINITIONS: AiToolDefinition[] = [
 ];
 
 export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
+  const customerCtx = input.company.customerContext;
+  const isVipSubscriber = Boolean(customerCtx?.isSubscriber && customerCtx.subscription);
+  const vipSub = isVipSubscriber ? customerCtx!.subscription! : null;
+
   const nonPlanServices = input.company.services.filter(
     (s) => !isSubscriptionPlanService(s),
   );
-  const topServicesPool =
-    nonPlanServices.length > 0 ? nonPlanServices : input.company.services;
-  const topThreeServices = topServicesPool.slice(0, 3);
+  const vipIncludedServices = vipSub
+    ? input.company.services.filter((s) => vipSub.includedServiceIds.includes(s.id))
+    : [];
+  const topServicesPool = isVipSubscriber && vipIncludedServices.length > 0
+    ? vipIncludedServices
+    : nonPlanServices.length > 0
+      ? nonPlanServices
+      : input.company.services;
+  const topThreeServices = isVipSubscriber && vipIncludedServices.length > 0
+    ? vipIncludedServices
+    : topServicesPool.slice(0, 3);
 
   const topServicesSummary =
     topThreeServices.length > 0
       ? topThreeServices
-          .map(
-            (s) =>
-              `- ${s.name} (id: ${s.id}, preço: R$ ${(s.priceInCents / 100).toFixed(2).replace(".", ",")}, duração: ${s.durationMinutes} min)`,
+          .map((s) =>
+            isVipSubscriber && vipSub?.includedServiceIds.includes(s.id)
+              ? `- ${s.name} (id: ${s.id}, preço: R$ 0,00 — incluso no Clube VIP, sem sinal, duração: ${s.durationMinutes} min)`
+              : `- ${s.name} (id: ${s.id}, preço: R$ ${(s.priceInCents / 100).toFixed(2).replace(".", ",")}, duração: ${s.durationMinutes} min)`,
           )
           .join("\n")
       : "- Nenhum serviço ativo listado no momento.";
@@ -373,14 +432,13 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
       ? `\nRegras operacionais da empresa:\n${operationalLines.join("\n")}\n`
       : "";
 
-  const customerCtx = input.company.customerContext;
   const hasVisitHistory = Boolean(
     customerCtx?.lastCompletedVisit ||
       customerCtx?.mostFrequentServiceName ||
       customerCtx?.preferredCollaboratorName ||
       (customerCtx?.totalVisits ?? 0) > 0,
   );
-  const isNewCustomer = customerCtx?.isNewCustomer ?? !hasVisitHistory;
+  const isNewCustomer = !isVipSubscriber && (customerCtx?.isNewCustomer ?? !hasVisitHistory);
 
   const resolvedCustomerName = resolveCustomerDisplayName({
     clientName: customerCtx?.registeredName,
@@ -392,11 +450,46 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
 
   const customerLines: string[] = [
     `- Tipo de cliente: ${
-      isNewCustomer
-        ? "Cliente NOVO (primeiro contato / sem atendimentos anteriores)"
-        : "Cliente RECORRENTE (já é cliente da casa)"
+      isVipSubscriber
+        ? `ASSINANTE ATIVO DO CLUBE VIP (Plano: ${vipSub!.planName}, status: ${vipSub!.status})`
+        : isNewCustomer
+          ? "Cliente NOVO (primeiro contato / sem atendimentos anteriores)"
+          : "Cliente RECORRENTE (não-assinante)"
     }`,
   ];
+  if (vipSub) {
+    const includedNames =
+      vipSub.includedServiceNames.length > 0
+        ? vipSub.includedServiceNames.join(", ")
+        : "serviços cobertos pelo plano";
+    customerLines.push(
+      `- Benefício Clube VIP: isento de sinal em TODOS os agendamentos (inclusive serviços extras fora do plano). Serviços inclusos gratuitos (R$ 0,00): ${includedNames}.`,
+    );
+    if (vipSub.remainingUses !== null) {
+      customerLines.push(
+        `- Usos restantes no ciclo atual: ${vipSub.remainingUses} de ${vipSub.maxMonthlyUses}.`,
+      );
+    }
+    if (vipSub.currentPeriodEnd) {
+      customerLines.push(`- Vencimento do ciclo atual: ${vipSub.currentPeriodEnd.slice(0, 10)}.`);
+    }
+    if (vipSub.needsRenewalAlert) {
+      const renewalReason = vipSub.inGracePeriod
+        ? "assinatura em período de tolerância (vencida)"
+        : `faltam ${Math.max(0, vipSub.daysUntilRenewal ?? 0)} dia(s) para vencer`;
+      customerLines.push(
+        `- ALERTA DE RENOVAÇÃO ATIVO: ${renewalReason}. Lembre educadamente o cliente de renovar e ofereça gerar o link de pagamento (Pix ou Cartão) agora mesmo via gerar_pagamento_clube.`,
+      );
+    }
+  }
+  const depositPolicy = input.company.depositPolicy;
+  if (depositPolicy) {
+    customerLines.push(
+      depositPolicy.enabled && depositPolicy.depositPercentage > 0
+        ? `- Política de sinal da barbearia: ATIVA (${depositPolicy.depositPercentage}% de sinal para não-assinantes; assinantes VIP são sempre isentos).`
+        : "- Política de sinal da barbearia: DESATIVADA (nenhum cliente paga sinal antecipado).",
+    );
+  }
   if (resolvedCustomerName) {
     customerLines.push(`- Nome do cliente: ${resolvedCustomerName}`);
   } else {
@@ -473,16 +566,40 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
     ? `Cumprimente pelo primeiro nome (*${customerFirstName}*)`
     : 'Cumprimente apenas com "Olá! Tudo bem?" (NUNCA escreva "Cliente" ou "*Cliente*")';
 
-  const customerJourneyGuidance = isNewCustomer
+  const vipGuidance = vipSub
     ? [
+        `Abordagem obrigatória para ASSINANTE ATIVO DO CLUBE VIP (isSubscriber: true, Plano: *${vipSub.planName}*):`,
+        `- ${greetingInstruction} em tom natural e humanizado da barbearia (use apenas ✂️, 💈, ⏰, ✅ ou 👊), avisando logo no início da conversa que você já reconheceu que ele é membro do *Clube VIP* (*${vipSub.planName}*).`,
+        `- Liste SOMENTE os serviços disponíveis na assinatura dele (${vipSub.includedServiceNames.join(", ") || "serviços inclusos abaixo"}), destacando claramente que são *gratuitos/inclusos (R$ 0,00)* e *sem cobrança de sinal*.`,
+        "- Se o cliente pedir explicitamente um serviço extra que não está no plano, informe o valor avulso desse serviço extra e deixe claro que, por ser assinante VIP, ele continua *isento de sinal* e paga apenas o valor do serviço extra no atendimento.",
+        ...(vipSub.needsRenewalAlert
+          ? [
+              `- ALERTA DE RENOVAÇÃO OBRIGATÓRIO: A assinatura dele está próxima do vencimento ou em período de tolerância (${vipSub.inGracePeriod ? "em período de tolerância" : `faltam ${Math.max(0, vipSub.daysUntilRenewal ?? 0)} dia(s)`}). Lembre-o de forma cordial logo na conversa e pergunte se deseja renovar agora por *Pix* ou *Cartão*. Se ele aceitar, chame gerar_pagamento_clube(action: "RENEW", paymentMethod: "PIX" ou "CREDIT_CARD") e envie o código Pix Copia e Cola ou o link de pagamento; quando ele avisar que pagou, chame verificar_status_pagamento para confirmar.`,
+            ]
+          : []),
+        ...(preferredBarberPriorityLine ? [preferredBarberPriorityLine] : []),
+      ].join("\n")
+    : null;
+
+  const nonSubscriberDepositLine =
+    depositPolicy && depositPolicy.enabled && depositPolicy.depositPercentage > 0
+      ? `- REGRA DE SINAL PARA NÃO-ASSINANTE: A barbearia exige sinal de ${depositPolicy.depositPercentage}% para confirmar agendamentos avulsos. Ao chamar criar_agendamento, o horário ficará pendente até o pagamento do sinal — envie imediatamente ao cliente o código Pix Copia e Cola ou link retornado pela ferramenta para confirmar o horário (e use verificar_status_pagamento se ele avisar que já pagou). Se o gateway pedir CPF, peça o CPF ao cliente e chame criar_agendamento novamente passando document.`
+      : "- REGRA DE SINAL: A cobrança de sinal está desativada na barbearia — confirme agendamentos avulsos diretamente sem cobrar sinal.";
+
+  const customerJourneyGuidance = vipGuidance
+    ? vipGuidance
+    : isNewCustomer
+      ? [
         "Abordagem obrigatória para CLIENTE NOVO (isNewCustomer: true):",
         `- ${greetingInstruction} e dê boas-vindas acolhedoras à "${input.company.companyName}" com tom natural e respeitoso (use apenas emojis permitidos: ✂️, 💈, ⏰, ✅ ou 👊; PROIBIDO gírias forçadas como "mandar bem" ou "colar com a gente").`,
         "- NÃO liste todos os serviços na primeira mensagem. Mostre apenas os *3 principais serviços* (com preço) e os *profissionais da equipe*.",
         "- Apresente exatamente estas 4 opções claras para guiar o cliente:",
         '  1️⃣ *Agendar um horário* (diga o serviço, barbeiro ou "tanto faz", e o dia/hora)',
         "  2️⃣ *Ver catálogo completo de serviços*",
-        "  3️⃣ *Conhecer nossos planos de assinatura* 👑",
+        "  3️⃣ *Conhecer nossos planos de assinatura* 👑 (Clube VIP)",
         "  4️⃣ *Falar com um atendente*",
+        nonSubscriberDepositLine,
+        "- Se o cliente pedir para assinar ou perguntar sobre planos do Clube VIP, chame consultar_planos_assinatura e apresente TODOS os planos ativos retornados pelo banco bem descritos (nome, valor mensal, serviços inclusos, limite mensal de usos e dias permitidos). Quando ele escolher um plano, pergunte se prefere pagar via *Pix* ou *Cartão* (se ainda não tiver dito) e chame gerar_pagamento_clube(action: \"SUBSCRIBE\", planId, paymentMethod) enviando o link/Pix para ativação.",
         "- Se a resposta ao menu inicial for 1 (Agendar um horário) e o cliente ainda não tiver escolhido o serviço, pergunte qual ele quer. Liste até os 3 principais serviços abaixo, numerados e com preço; acrescente a próxima opção numerada como *Ver outros serviços* se houver mais serviços. Convide a responder com o número ou nome. Não liste categorias, profissionais nem peça data ou horário nessa etapa.",
         "- Ao interpretar um número, use o último menu ou a última pergunta. No menu de serviços, os números escolhem um serviço ou *Ver outros serviços*; no menu inicial, escolhem a ação. Em *Ver outros serviços*, chame listar_servicos_e_profissionais para mostrar o catálogo completo.",
         "- Assim que o cliente escolher o serviço, chame consultar_horarios_livres no mesmo turno. Use a data pedida/combinada ou, se faltar, amanhã no fuso da empresa. Se não houver profissional escolhido, consulte sem collaboratorId para ver toda a equipe disponível. Se o cliente já escolheu um horário, siga direto para a validação e criação conforme as regras de agendamento.",
@@ -497,11 +614,12 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
         `- ${greetingInstruction} com proximidade, tom natural e respeitoso (use apenas ✂️, 💈, ⏰, ✅ ou 👊; PROIBIDO usar gírias forçadas como "mandar bem" ou "colar com a gente").`,
         `- ${recurringHabitualLine}`,
         ...(preferredBarberPriorityLine ? [preferredBarberPriorityLine] : []),
-        "- NÃO despeje o catálogo completo na primeira mensagem. Ofereça exatamente estas 3 opções claras:",
+        nonSubscriberDepositLine,
+        "- NÃO despeje o catálogo completo na primeira mensagem. Ofereça exatamente estas 3 opções claras (incluindo a opção de conhecer o Clube VIP):",
         "  1️⃣ *Agendar o de sempre* (basta dizer o dia e horário)",
-        "  2️⃣ *Ver catálogo de serviços e planos*",
+        "  2️⃣ *Ver catálogo de serviços e planos* (incluindo Clube VIP)",
         "  3️⃣ *Falar com um atendente*",
-        "- Se o cliente responder com a opção 2, chame listar_servicos_e_profissionais (e consultar_planos_assinatura se necessário) e apresente os serviços organizados por categoria em blocos enxutos junto com os planos disponíveis.",
+        "- Se o cliente responder com a opção 2 ou perguntar sobre o Clube VIP, chame listar_servicos_e_profissionais e consultar_planos_assinatura, descrevendo todos os planos ativos (nome, valor mensal, serviços inclusos, limite de usos e dias permitidos). Se escolher assinar, chame gerar_pagamento_clube(action: \"SUBSCRIBE\", planId, paymentMethod).",
         "- Se o cliente responder com a opção 3, chame request_human_handoff.",
       ].join("\n");
 
@@ -704,6 +822,7 @@ export async function dispatchAiBookingToolCall(
           notes: rawArgs.notes ? String(rawArgs.notes) : undefined,
           isGuest: rawArgs.isGuest === true,
           payFullPrice: rawArgs.payFullPrice === true,
+          document: rawArgs.document ? String(rawArgs.document).replace(/\D/g, "") || undefined : undefined,
         });
         if (data.success === false) {
           actions.push({
@@ -719,7 +838,9 @@ export async function dispatchAiBookingToolCall(
           tool: "criar_agendamento",
           input: rawArgs,
           ok: true,
-          summary: `Agendamento ${data.id} criado.`,
+          summary: data.requiresDeposit
+            ? `Pré-reserva ${data.id} criada aguardando pagamento de sinal.`
+            : `Agendamento ${data.id} criado.`,
           data: {
             ...data,
             appointmentId: data.id,
@@ -727,6 +848,52 @@ export async function dispatchAiBookingToolCall(
           },
         });
         return { result: { ...data, success: true }, converted: true };
+      }
+
+      case "gerar_pagamento_clube": {
+        if (!tools.createClubPayment) {
+          return {
+            result: { ok: false, message: "Pagamento do Clube VIP indisponível neste canal." },
+            converted: false,
+          };
+        }
+        const actionRaw = String(rawArgs.action ?? "SUBSCRIBE").toUpperCase();
+        const action = actionRaw === "RENEW" ? "RENEW" : "SUBSCRIBE";
+        const methodRaw = String(rawArgs.paymentMethod ?? "PIX").toUpperCase();
+        const paymentMethod = methodRaw === "CREDIT_CARD" ? "CREDIT_CARD" : "PIX";
+        const data = await tools.createClubPayment({
+          action,
+          planId: rawArgs.planId ? String(rawArgs.planId).trim() || undefined : undefined,
+          paymentMethod,
+          document: rawArgs.document ? String(rawArgs.document).replace(/\D/g, "") || undefined : undefined,
+        });
+        actions.push({
+          tool: "gerar_pagamento_clube",
+          input: rawArgs,
+          ok: data.ok,
+          summary: data.message,
+          data,
+        });
+        return { result: data, converted: data.ok };
+      }
+
+      case "verificar_status_pagamento": {
+        if (!tools.checkPaymentStatus) {
+          return {
+            result: { error: "Consulta de status de pagamento indisponível." },
+            converted: false,
+          };
+        }
+        const paymentId = String(rawArgs.paymentId ?? "").trim();
+        const data = await tools.checkPaymentStatus({ paymentId });
+        actions.push({
+          tool: "verificar_status_pagamento",
+          input: rawArgs,
+          ok: true,
+          summary: `Status da cobrança ${paymentId}: ${data.status}`,
+          data,
+        });
+        return { result: data, converted: data.status === "CONFIRMED" };
       }
 
       case "reagendar_agendamento": {

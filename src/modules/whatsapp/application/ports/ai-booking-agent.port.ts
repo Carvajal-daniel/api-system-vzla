@@ -23,6 +23,7 @@ export interface AiBookingSubscriptionPlanItem {
   allowedDaysOfWeek?: number[] | null | undefined;
   billingCycle?: "MONTHLY" | undefined;
   includedServiceIds?: string[] | undefined;
+  includedServiceNames?: string[] | undefined;
   maxMonthlyUses?: number | null | undefined;
 }
 
@@ -47,10 +48,28 @@ export interface AiBookingOperationalRules {
   packageNotes?: string | null;
 }
 
+export interface AiBookingCustomerSubscription {
+  subscriptionId: string;
+  planId: string;
+  planName: string;
+  status: "ACTIVE" | "PAST_DUE" | "SUSPENDED" | "CANCELED";
+  includedServiceIds: string[];
+  includedServiceNames: string[];
+  allowedDaysOfWeek: number[] | null;
+  maxMonthlyUses: number | null;
+  remainingUses: number | null;
+  currentPeriodEnd: string | null;
+  daysUntilRenewal: number | null;
+  inGracePeriod: boolean;
+  needsRenewalAlert: boolean;
+}
+
 export interface AiBookingCustomerContext {
   isNewCustomer?: boolean;
   totalVisits?: number;
   registeredName: string | null;
+  isSubscriber?: boolean;
+  subscription?: AiBookingCustomerSubscription | null;
   mostFrequentServiceName?: string | null;
   lastCompletedVisit?: {
     localDate: string;
@@ -71,6 +90,11 @@ export interface AiBookingCompanyContext {
   services: AiBookingServiceSummary[];
   collaborators: AiBookingCollaboratorSummary[];
   operationalRules?: AiBookingOperationalRules;
+  depositPolicy?: {
+    enabled: boolean;
+    depositPercentage: number;
+    hasActivePaymentProvider: boolean;
+  };
   customerContext?: AiBookingCustomerContext;
 }
 
@@ -90,6 +114,8 @@ export interface AiExecutedToolAction {
     | "criar_agendamento"
     | "reagendar_agendamento"
     | "cancelar_agendamento"
+    | "gerar_pagamento_clube"
+    | "verificar_status_pagamento"
     | "request_human_handoff";
   input: Record<string, unknown>;
   ok: boolean;
@@ -116,6 +142,15 @@ export interface AiBookingAvailabilitySlot {
   collaboratorName: string;
 }
 
+export interface AiBookingPaymentLinkInfo {
+  paymentId: string | null;
+  amountCents: number;
+  status: string;
+  pixCopyPaste: string | null;
+  checkoutUrl: string | null;
+  expiresAt: string | null;
+}
+
 export type AiBookingCreateAppointmentResult =
   | {
       success?: true;
@@ -127,6 +162,11 @@ export type AiBookingCreateAppointmentResult =
       status: string;
       serviceName: string;
       collaboratorId: string;
+      servicePriceInCents?: number;
+      coveredByClub?: boolean;
+      requiresDeposit?: boolean;
+      depositAmountCents?: number;
+      payment?: AiBookingPaymentLinkInfo | null;
     }
   | {
       success: false;
@@ -171,7 +211,30 @@ export interface AiBookingToolExecutor {
     notes?: string | undefined;
     isGuest?: boolean | undefined;
     payFullPrice?: boolean | undefined;
+    document?: string | undefined;
   }): Promise<AiBookingCreateAppointmentResult>;
+
+  createClubPayment?(input: {
+    action: "SUBSCRIBE" | "RENEW";
+    planId?: string | undefined;
+    paymentMethod: "PIX" | "CREDIT_CARD";
+    document?: string | undefined;
+  }): Promise<{
+    ok: boolean;
+    subscriptionId?: string | undefined;
+    payment?: AiBookingPaymentLinkInfo | null | undefined;
+    message: string;
+    code?: string | undefined;
+  }>;
+
+  checkPaymentStatus?(input: {
+    paymentId: string;
+  }): Promise<{
+    paymentId: string;
+    status: string;
+    paidAt: string | null;
+    expiresAt: string | null;
+  }>;
 
   rescheduleAppointment(input: {
     appointmentId: string;

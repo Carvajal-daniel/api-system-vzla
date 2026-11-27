@@ -313,4 +313,93 @@ describe("Frictionless owner payments onboarding", () => {
 
     await app.close();
   });
+
+  it("connects an existing Asaas account using only apiKey, validates via /v3/myAccount, and auto-registers webhook on public URL", async () => {
+    vi.stubEnv("PAYMENT_ENCRYPTION_KEY", TEST_ENCRYPTION_KEY);
+    vi.stubEnv("API_PUBLIC_URL", "https://api.barbearia.test");
+
+    const mockTransport = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "acc_existing_01",
+          walletId: "wallet_existing_123",
+          tradingName: "Barbearia Dom Pedro",
+          email: "contato@dompedro.test",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ id: "wh_001", enabled: true }));
+
+    const app = await buildApp(mockTransport);
+    const res = await app.inject({
+      method: "POST",
+      url: "/payments/onboarding/asaas/connect-existing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        apiKey: "$aact_prod_existing_secret_key_123456",
+        staticPixKey: "contato@dompedro.test",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain("$aact_prod_existing_secret_key_123456");
+    expect(res.json()).toEqual({
+      provider: "ASAAS",
+      connected: true,
+      accountLabel: "Barbearia Dom Pedro",
+      walletId: "wallet_existing_123",
+    });
+
+    // 1a chamada: GET /v3/myAccount em produção (detectado pelo prefixo $aact_prod_)
+    expect(mockTransport).toHaveBeenCalledTimes(2);
+    expect(mockTransport.mock.calls[0]?.[0]).toBe("https://api.asaas.com/v3/myAccount");
+    expect(mockTransport.mock.calls[0]?.[1]?.method).toBe("GET");
+
+    // 2a chamada: POST /v3/webhooks com URL pública e authToken gerado no servidor
+    expect(mockTransport.mock.calls[1]?.[0]).toBe("https://api.asaas.com/v3/webhooks");
+    expect(mockTransport.mock.calls[1]?.[1]?.method).toBe("POST");
+    const webhookBody = JSON.parse(String(mockTransport.mock.calls[1]?.[1]?.body));
+    expect(webhookBody).toMatchObject({
+      url: "https://api.barbearia.test/payments/webhooks/asaas",
+      enabled: true,
+    });
+    expect(typeof webhookBody.authToken).toBe("string");
+    expect(webhookBody.authToken.length).toBeGreaterThanOrEqual(32);
+
+    await app.close();
+  });
+
+  it("returns 422 when connecting an invalid Asaas apiKey and skips webhook registration on localhost", async () => {
+    vi.stubEnv("PAYMENT_ENCRYPTION_KEY", TEST_ENCRYPTION_KEY);
+    vi.stubEnv("API_PUBLIC_URL", "http://localhost:3333");
+
+    const invalidTransport = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({ errors: [{ description: "Chave de API inválida" }] }, { status: 401 }),
+    );
+    const appInvalid = await buildApp(invalidTransport);
+    const invalidRes = await appInvalid.inject({
+      method: "POST",
+      url: "/payments/onboarding/asaas/connect-existing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { apiKey: "$aact_hmlg_invalid_key_123456" },
+    });
+    expect(invalidRes.statusCode).toBe(422);
+    expect(invalidRes.json()).toMatchObject({ code: "ASAAS_INVALID_API_KEY" });
+    expect(invalidTransport.mock.calls[0]?.[0]).toBe("https://api-sandbox.asaas.com/v3/myAccount");
+    await appInvalid.close();
+
+    const localhostTransport = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({ id: "acc_local", walletId: "wallet_local", name: "Sandbox Local" }),
+    );
+    const appLocal = await buildApp(localhostTransport);
+    const okRes = await appLocal.inject({
+      method: "POST",
+      url: "/payments/onboarding/asaas/connect-existing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { apiKey: "$aact_hmlg_valid_local_key_123456" },
+    });
+    expect(okRes.statusCode).toBe(200);
+    // Apenas GET /v3/myAccount; POST /v3/webhooks é ignorado silenciosamente em localhost.
+    expect(localhostTransport).toHaveBeenCalledTimes(1);
+    await appLocal.close();
+  });
 });
