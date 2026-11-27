@@ -8,6 +8,9 @@ import {
 import { DrizzleClientsRepository } from "../../../clients/infra/database/repositories/drizzle-clients.repository.js";
 import { PlanQuotaGuardUseCase } from "../../../billing/application/use-cases/plan-quota-guard.use-case.js";
 import { DrizzleTenantUsageRepository } from "../../../billing/infra/database/repositories/drizzle-tenant-usage.repository.js";
+import { PostVisitSurveyUseCase } from "../../../operations/application/post-visit-survey.use-case.js";
+import { DrizzleOperationsRepository } from "../../../operations/infra/database/repositories/drizzle-operations.repository.js";
+import { WhatsAppOperationsNotificationAdapter } from "../../../operations/infra/notifications/whatsapp-operations-notification.adapter.js";
 import { WhatsAppAiTurnOrchestrator } from "../../application/services/whatsapp-ai-turn-orchestrator.js";
 import { AnalyzeWhatsAppConversationUseCase } from "../../application/use-cases/analyze-whatsapp-conversation.use-case.js";
 import { AskBusinessCopilotUseCase } from "../../application/use-cases/ask-business-copilot.use-case.js";
@@ -232,6 +235,11 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     turnOrchestrator.dispose();
   });
 
+  const postVisitSurveyUseCase = new PostVisitSurveyUseCase(
+    new DrizzleOperationsRepository(),
+    new WhatsAppOperationsNotificationAdapter(hybridGatewayRouter),
+  );
+
   const processInboundUseCase = new ProcessInboundWhatsAppMessageUseCase(
     clientsRepository,
     connectionRepository,
@@ -246,7 +254,21 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
       whatsappGateway: hybridGatewayRouter,
       turnOrchestrator,
       proactiveInsightsWriter,
-      npsReplyHandler: processPostVisitNpsUseCase,
+      npsReplyHandler: {
+        async tryHandleInboundReply(input) {
+          // Prioriza a nova tabela `post_visit_surveys` na camada L0 (0 tokens, janela 24h).
+          const surveyHandled = await postVisitSurveyUseCase.tryHandleInboundL0Reply({
+            companyId: input.companyId,
+            phone: input.phone,
+            content: input.content,
+            now: input.now,
+          });
+          if (surveyHandled.handled) {
+            return { handled: true, conversation: input.conversation, outboundMessage: null };
+          }
+          return processPostVisitNpsUseCase.tryHandleInboundReply(input);
+        },
+      },
     },
   );
   const listConversationsUseCase = new ListWhatsAppConversationsUseCase(

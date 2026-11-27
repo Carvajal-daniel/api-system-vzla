@@ -11,6 +11,9 @@ import {
 import { CollectionsError, PAYMENT_METHODS } from "../../../domain/collections.js";
 import { ORDER_ITEM_TYPES, ORDER_STATUSES } from "../../../domain/orders.js";
 import { DrizzleOrdersRepository } from "../../database/repositories/drizzle-orders.repository.js";
+import { PostVisitSurveyUseCase } from "../../../../operations/application/post-visit-survey.use-case.js";
+import { DrizzleOperationsRepository } from "../../../../operations/infra/database/repositories/drizzle-operations.repository.js";
+import { WhatsAppOperationsNotificationAdapter } from "../../../../operations/infra/notifications/whatsapp-operations-notification.adapter.js";
 
 const optionalText = (max: number) =>
   z
@@ -89,10 +92,14 @@ function requireActor(request: FastifyRequest) {
 
 export async function orderRoutes(app: FastifyInstance) {
   const repository = new DrizzleOrdersRepository();
-  const createOrder = new CreateFinanceOrder(repository);
+  const postVisitSurveyHook = new PostVisitSurveyUseCase(
+    new DrizzleOperationsRepository(),
+    new WhatsAppOperationsNotificationAdapter(),
+  );
+  const createOrder = new CreateFinanceOrder(repository, postVisitSurveyHook);
   const listOrders = new ListFinanceOrders(repository);
   const getOrder = new GetFinanceOrder(repository);
-  const updateOrder = new UpdateFinanceOrder(repository);
+  const updateOrder = new UpdateFinanceOrder(repository, postVisitSurveyHook);
   const reopenOrder = new ReopenFinanceOrder(repository);
 
   const policy = {

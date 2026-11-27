@@ -17,13 +17,39 @@ function assertOwner(actor: ActorContext): asserts actor is Extract<ActorContext
   }
 }
 
+export interface OnOrderClosedSurveyHook {
+  scheduleForClosedOrder(input: {
+    companyId: string;
+    appointmentId: string | null;
+    clientPhone?: string | null | undefined;
+    clientName?: string | null | undefined;
+    closedAt?: Date | undefined;
+  }): Promise<unknown>;
+}
+
 export class CreateFinanceOrder {
-  constructor(private readonly repository: OrdersRepository) {}
+  constructor(
+    private readonly repository: OrdersRepository,
+    private readonly surveyHook?: OnOrderClosedSurveyHook,
+  ) {}
 
   async execute(actor: ActorContext, input: CreateOrderInput): Promise<FinanceOrderRecord> {
     assertOwner(actor);
     const draft = computeOrderDraft(input);
-    return this.repository.createOrder(actor.companyId, draft);
+    const created = await this.repository.createOrder(actor.companyId, draft);
+    if (created.status === "CLOSED" && created.appointmentId && this.surveyHook) {
+      try {
+        await this.surveyHook.scheduleForClosedOrder({
+          companyId: actor.companyId,
+          appointmentId: created.appointmentId,
+          clientPhone: created.clientPhone,
+          clientName: created.clientName,
+        });
+      } catch {
+        // Isola falha no agendamento da pesquisa pós-atendimento para não abortar o fechamento da comanda.
+      }
+    }
+    return created;
   }
 }
 
@@ -53,7 +79,10 @@ export class GetFinanceOrder {
 }
 
 export class UpdateFinanceOrder {
-  constructor(private readonly repository: OrdersRepository) {}
+  constructor(
+    private readonly repository: OrdersRepository,
+    private readonly surveyHook?: OnOrderClosedSurveyHook,
+  ) {}
 
   async execute(
     actor: ActorContext,
@@ -70,7 +99,20 @@ export class UpdateFinanceOrder {
       throw new CollectionsError("CONFLICT", "FINANCE_ORDER_CLOSED_REQUIRES_PIN");
     }
     const draft = computeOrderUpdateDraft(input);
-    return this.repository.updateOrder(actor.companyId, orderId, draft);
+    const updated = await this.repository.updateOrder(actor.companyId, orderId, draft);
+    if (updated.status === "CLOSED" && updated.appointmentId && this.surveyHook) {
+      try {
+        await this.surveyHook.scheduleForClosedOrder({
+          companyId: actor.companyId,
+          appointmentId: updated.appointmentId,
+          clientPhone: updated.clientPhone,
+          clientName: updated.clientName,
+        });
+      } catch {
+        // Isola falha no agendamento da pesquisa pós-atendimento para não abortar o fechamento da comanda.
+      }
+    }
+    return updated;
   }
 }
 

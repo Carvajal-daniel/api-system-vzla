@@ -14,7 +14,13 @@ import {
   type OwnerAuthorizationVerifier,
   RevertCompletedAppointmentUseCase,
 } from "../../../application/use-cases/revert-completed-appointment.use-case.js";
-import { UpdateAppointmentStatusUseCase } from "../../../application/use-cases/update-appointment-status.use-case.js";
+import {
+  type OnAppointmentCanceledHook,
+  UpdateAppointmentStatusUseCase,
+} from "../../../application/use-cases/update-appointment-status.use-case.js";
+import { WaitlistUseCase } from "../../../../operations/application/waitlist.use-case.js";
+import { DrizzleOperationsRepository } from "../../../../operations/infra/database/repositories/drizzle-operations.repository.js";
+import { WhatsAppOperationsNotificationAdapter } from "../../../../operations/infra/notifications/whatsapp-operations-notification.adapter.js";
 import type { AppointmentsRepository } from "../../../domain/repositories/appointments.repository.js";
 import type { ScheduleBlocksRepository } from "../../../domain/repositories/schedule-blocks.repository.js";
 import type { SchedulingContextLookupRepository } from "../../../domain/repositories/scheduling-context-lookup.repository.js";
@@ -64,6 +70,7 @@ export interface AppointmentsDependencies {
   lookupRepository?: SchedulingContextLookupRepository;
   absenceNotificationPort?: AbsenceNotificationPort;
   ownerAuthorizationVerifier?: OwnerAuthorizationVerifier;
+  waitlistHook?: OnAppointmentCanceledHook;
 }
 
 export function makeAppointmentsControllers(
@@ -105,6 +112,13 @@ export function makeAppointmentsControllers(
     new DeleteScheduleBlockUseCase(scheduleBlocksRepository),
   );
 
+  const waitlistHook =
+    deps.waitlistHook ??
+    new WaitlistUseCase(
+      new DrizzleOperationsRepository(),
+      new WhatsAppOperationsNotificationAdapter(),
+    );
+
   const appointmentsController = new AppointmentsController(
     new GetAvailabilityUseCase(
       lookupRepository,
@@ -117,7 +131,7 @@ export function makeAppointmentsControllers(
       appointmentsRepository,
     ),
     new ListAppointmentsUseCase(appointmentsRepository),
-    new UpdateAppointmentStatusUseCase(appointmentsRepository),
+    new UpdateAppointmentStatusUseCase(appointmentsRepository, waitlistHook),
     new RescheduleAppointmentUseCase(
       lookupRepository,
       scheduleBlocksRepository,

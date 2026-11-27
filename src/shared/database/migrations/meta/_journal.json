@@ -197,6 +197,13 @@
       "when": 1796071500000,
       "tag": "0027_mercado_pago",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1796071600000,
+      "tag": "0028_phase_3_operations_and_retention",
+      "breakpoints": true
     }
   ]
 }

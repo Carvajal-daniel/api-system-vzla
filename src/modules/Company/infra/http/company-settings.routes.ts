@@ -28,12 +28,22 @@ async function readCompanySettings(companyId: string): Promise<Settings> {
 }
 
 async function snapshot(companyId: string) {
-  const [{ settings, countryCodeConfigured }, [rating]] = await Promise.all([
+  const [{ settings, countryCodeConfigured }, [rating], [companyRow]] = await Promise.all([
     readSettingsSnapshot(companyId),
     db.select({ count: count(CollaboratorReviewTable.rating), average: avg(CollaboratorReviewTable.rating) })
       .from(CollaboratorReviewTable).where(and(eq(CollaboratorReviewTable.companyId, companyId), between(CollaboratorReviewTable.rating, 1, 5))),
+    db.select({
+      googleReviewUrl: CompanyTable.googleReviewUrl,
+      enablePostVisitSurvey: CompanyTable.enablePostVisitSurvey,
+    }).from(CompanyTable).where(eq(CompanyTable.id, companyId)).limit(1),
   ]);
-  return { ...settings, countryCodeConfigured, rating: rating?.count ? { count: rating.count, average: Number(rating.average) } : null };
+  return {
+    ...settings,
+    countryCodeConfigured,
+    googleReviewUrl: companyRow?.googleReviewUrl ?? null,
+    enablePostVisitSurvey: companyRow?.enablePostVisitSurvey ?? true,
+    rating: rating?.count ? { count: rating.count, average: Number(rating.average) } : null,
+  };
 }
 
 const owner = { preHandler: [authenticate, authorizeRoles("OWNER")] };
@@ -74,8 +84,13 @@ export async function companySettingsRoutes(app: FastifyInstance) {
       appearance: appearanceSchema.partial().optional(), palette: appearanceSchema.shape.palette.optional(),
       mode: appearanceSchema.shape.mode.optional(), theme: appearanceSchema.shape.mode.optional(),
       region: z.object({ timezone: timezoneSchema, currency: z.enum(["BRL", "USD", "VES"]) }).optional(),
+      googleReviewUrl: z.string().trim().url().max(500).nullable().optional(),
+      enablePostVisitSurvey: z.boolean().optional(),
     }).parse(request.body);
-    const { appearance: nested, palette, mode, theme, region, ...preferences } = body;
+    const { appearance: nested, palette, mode, theme, region, googleReviewUrl, enablePostVisitSurvey, ...preferences } = body;
+    const companySurveyUpdates: Partial<typeof CompanyTable.$inferInsert> = {};
+    if (googleReviewUrl !== undefined) companySurveyUpdates.googleReviewUrl = googleReviewUrl;
+    if (enablePostVisitSurvey !== undefined) companySurveyUpdates.enablePostVisitSurvey = enablePostVisitSurvey;
     const appearance = {
       ...nested,
       ...(palette ? { palette } : {}),
@@ -97,11 +112,15 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     if (region) {
       await db.transaction(async (tx) => {
         await updateCompanyCurrency(tx, companyId, region.currency);
-        await tx.update(CompanyTable).set({ timezone: region.timezone, updatedAt: new Date() })
+        await tx.update(CompanyTable).set({ timezone: region.timezone, ...companySurveyUpdates, updatedAt: new Date() })
           .where(eq(CompanyTable.id, companyId));
         await writePreferences(tx);
       });
     } else {
+      if (Object.keys(companySurveyUpdates).length > 0) {
+        await db.update(CompanyTable).set({ ...companySurveyUpdates, updatedAt: new Date() })
+          .where(eq(CompanyTable.id, companyId));
+      }
       await writePreferences(db);
     }
     return snapshot(companyId);

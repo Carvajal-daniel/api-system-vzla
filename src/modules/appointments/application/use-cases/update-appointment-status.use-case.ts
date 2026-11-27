@@ -11,9 +11,19 @@ import {
   toAppointmentOutputDTO,
 } from "../dtos/appointment.dtos.js";
 
+export interface OnAppointmentCanceledHook {
+  notifyNextCompatibleForCanceledAppointment(input: {
+    companyId: string;
+    collaboratorId: string;
+    startsAt: Date;
+    now?: Date | undefined;
+  }): Promise<unknown>;
+}
+
 export class UpdateAppointmentStatusUseCase {
   constructor(
     private readonly appointmentsRepository: AppointmentsRepository,
+    private readonly waitlistHook?: OnAppointmentCanceledHook,
   ) {}
 
   async execute(
@@ -49,6 +59,20 @@ export class UpdateAppointmentStatusUseCase {
 
     appointment.transitionStatus(input.status, input.cancellationReason ?? null);
     await this.appointmentsRepository.save(appointment, { startsAt, status, collaboratorId }, ai ? now : undefined);
+
+    // Gatilho automático da Fila de Espera Inteligente ao liberar um horário futuro por cancelamento.
+    if (input.status === "CANCELED" && this.waitlistHook && startsAt > now) {
+      try {
+        await this.waitlistHook.notifyNextCompatibleForCanceledAppointment({
+          companyId: actor.companyId,
+          collaboratorId,
+          startsAt,
+          now,
+        });
+      } catch {
+        // Isola falhas na fila de espera para nunca reverter o cancelamento já confirmado.
+      }
+    }
 
     return toAppointmentOutputDTO(appointment);
   }

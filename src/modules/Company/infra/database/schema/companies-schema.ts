@@ -53,6 +53,8 @@ export const CompanyTable = pgTable("companies", {
   currency: varchar("currency", { length: 3 }).$type<Currency>().default("BRL").notNull(),
   financeOpenedOn: date("finance_opened_on").default(sql`CURRENT_DATE`).notNull(),
   monthlyGoalCurrency: varchar("monthly_goal_currency", { length: 3 }).default("BRL").notNull(),
+  googleReviewUrl: text("google_review_url"),
+  enablePostVisitSurvey: boolean("enable_post_visit_survey").default(true).notNull(),
   
   // Auditoria (Garantindo Timezone para o cenÃ¡rio de MaturÃ­n/Venezuela VET UTC-4)
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

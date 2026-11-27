@@ -3,6 +3,10 @@ import { PlanQuotaGuardUseCase } from "../../../billing/application/use-cases/pl
 import { DrizzleTenantUsageRepository } from "../../../billing/infra/database/repositories/drizzle-tenant-usage.repository.js";
 import { ProcessAppointmentRemindersUseCase } from "../../../whatsapp/application/use-cases/process-appointment-reminders.use-case.js";
 import { ProcessPostVisitNpsUseCase } from "../../../whatsapp/application/use-cases/process-post-visit-nps.use-case.js";
+import { PostVisitSurveyUseCase } from "../../../operations/application/post-visit-survey.use-case.js";
+import { WaitlistUseCase } from "../../../operations/application/waitlist.use-case.js";
+import { DrizzleOperationsRepository } from "../../../operations/infra/database/repositories/drizzle-operations.repository.js";
+import { WhatsAppOperationsNotificationAdapter } from "../../../operations/infra/notifications/whatsapp-operations-notification.adapter.js";
 import { WhatsAppGatewayRouter as HybridWhatsAppGatewayRouter } from "../../../whatsapp/infra/adapters/whatsapp/whatsapp-gateway.router.js";
 import { DrizzleAppointmentRemindersRepository } from "../../../whatsapp/infra/database/repositories/drizzle-appointment-reminders.repository.js";
 import { DrizzlePostVisitNpsRepository } from "../../../whatsapp/infra/database/repositories/drizzle-post-visit-nps.repository.js";
@@ -87,6 +91,18 @@ export function registerIntelligenceScheduler(app: FastifyInstance): void {
     planQuotaGuard,
     proactiveInsightsWriter,
   );
+  const operationsRepository = new DrizzleOperationsRepository();
+  const operationsNotificationAdapter = new WhatsAppOperationsNotificationAdapter(
+    hybridGateway,
+  );
+  const postVisitSurveyUseCase = new PostVisitSurveyUseCase(
+    operationsRepository,
+    operationsNotificationAdapter,
+  );
+  const waitlistUseCase = new WaitlistUseCase(
+    operationsRepository,
+    operationsNotificationAdapter,
+  );
   const proactiveIntelligenceUseCase = new ProactiveIntelligenceUseCase(
     dataRepository,
     insightsRepository,
@@ -133,6 +149,8 @@ export function registerIntelligenceScheduler(app: FastifyInstance): void {
     await runWithLock("reminders_and_nps", async () => {
       await processRemindersUseCase.execute();
       await processPostVisitNpsUseCase.dispatchPendingSurveys();
+      await postVisitSurveyUseCase.dispatchDueSurveys();
+      await waitlistUseCase.expireStaleOffersAndNotifyNext();
     });
   };
 
