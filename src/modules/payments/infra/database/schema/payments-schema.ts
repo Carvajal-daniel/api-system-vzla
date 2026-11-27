@@ -5,7 +5,7 @@ import { CompanyTable } from "../../../../Company/infra/database/schema/companie
 import { SubscriptionPlanTable } from "../../../../appointments/infra/database/schema/subscription-plans-schema.js";
 import { FinanceOrderTable } from "../../../../finance/infra/database/schema/orders-schema.js";
 import { ClientTable } from "../../../../clients/infra/database/schema/clients-schema.js";
-import { chargeMethods, chargeReferences, chargeStatuses, paymentProviders, subscriptionMethods, subscriptionStatuses } from "../../../domain/payment-gateway.js";
+import { chargeMethods, chargeReferences, chargeStatuses, onlinePaymentProviders, paymentProviders, subscriptionMethods, subscriptionStatuses } from "../../../domain/payment-gateway.js";
 
 export const CompanyPaymentConfigTable = pgTable("company_payment_configs", {
   companyId: uuid("company_id").primaryKey().references(() => CompanyTable.id, { onDelete: "cascade" }),
@@ -13,7 +13,7 @@ export const CompanyPaymentConfigTable = pgTable("company_payment_configs", {
   providerApiKeyEncrypted: text("provider_api_key_encrypted"),
   webhookTokenEncrypted: text("webhook_token_encrypted"),
   staticPixKey: text("static_pix_key"),
-}, (t) => [check("company_payment_provider_check", sql`${t.paymentProvider} in ('NONE','ASAAS','SANDBOX')`)]);
+}, (t) => [check("company_payment_provider_check", sql`${t.paymentProvider} in ('NONE','ASAAS','MERCADO_PAGO','SANDBOX')`)]);
 
 export const ClientSubscriptionTable = pgTable("client_subscriptions", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -22,9 +22,10 @@ export const ClientSubscriptionTable = pgTable("client_subscriptions", {
   planId: uuid("plan_id").notNull(),
   status: text("status", { enum: subscriptionStatuses }).notNull().default("PENDING_PAYMENT"),
   paymentMethod: text("payment_method", { enum: subscriptionMethods }).notNull(),
-  paymentProvider: text("payment_provider", { enum: ["ASAAS", "SANDBOX"] }).notNull(),
+  paymentProvider: text("payment_provider", { enum: onlinePaymentProviders }).notNull(),
   priceCents: integer("price_cents").notNull(),
   externalSubscriptionId: text("external_subscription_id"),
+  checkoutUrl: text("checkout_url"),
   currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   nextBillingDate: date("next_billing_date", { mode: "string" }).notNull(),
@@ -35,7 +36,9 @@ export const ClientSubscriptionTable = pgTable("client_subscriptions", {
   uniqueIndex("client_subscriptions_external_idx").on(t.companyId, t.paymentProvider, t.externalSubscriptionId),
   index("client_subscriptions_status_idx").on(t.companyId, t.status),
   check("client_subscriptions_status_check", sql`${t.status} in ('PENDING_PAYMENT','ACTIVE','PAST_DUE','SUSPENDED','CANCELED')`),
-  check("client_subscriptions_payment_check", sql`${t.paymentMethod} in ('PIX','CREDIT_CARD') and ${t.paymentProvider} in ('ASAAS','SANDBOX') and ${t.priceCents} > 0`),
+  check("client_subscriptions_payment_method_check", sql`${t.paymentMethod} in ('PIX','CREDIT_CARD')`),
+  check("client_subscriptions_payment_provider_check", sql`${t.paymentProvider} in ('ASAAS','MERCADO_PAGO','SANDBOX')`),
+  check("client_subscriptions_price_cents_check", sql`${t.priceCents} > 0`),
   check("client_subscriptions_period_check", sql`(${t.currentPeriodStart} is null and ${t.currentPeriodEnd} is null) or (${t.currentPeriodStart} is not null and ${t.currentPeriodEnd} > ${t.currentPeriodStart})`),
 ]);
 
@@ -61,16 +64,20 @@ export const PaymentChargeTable = pgTable("payment_charges", {
   index("payment_charges_provider_external_lookup_idx").on(t.paymentProvider, t.externalId),
   uniqueIndex("payment_charges_pending_reference_idx").on(t.companyId, t.referenceType, t.referenceId).where(sql`${t.status} = 'PENDING'`),
   check("payment_charges_reference_check", sql`${t.referenceType} in ('ORDER','SUBSCRIPTION','APPOINTMENT_DEPOSIT')`),
-  check("payment_charges_method_check", sql`${t.method} in ('PIX_DYNAMIC','PIX_STATIC','CREDIT_CARD') and ${t.paymentProvider} in ('NONE','ASAAS','SANDBOX')`),
+  check("payment_charges_method_check", sql`${t.method} in ('PIX_DYNAMIC','PIX_STATIC','CREDIT_CARD')`),
+  check("payment_charges_payment_provider_check", sql`${t.paymentProvider} in ('NONE','ASAAS','MERCADO_PAGO','SANDBOX')`),
   check("payment_charges_status_check", sql`${t.status} in ('PENDING','CONFIRMED','EXPIRED','CANCELED') and ${t.amountCents} > 0`),
 ]);
 
 export const PaymentWebhookEventTable = pgTable("payment_webhook_events", {
   companyId: uuid("company_id").notNull().references(() => CompanyTable.id, { onDelete: "cascade" }),
-  provider: text("provider", { enum: ["ASAAS", "SANDBOX"] }).notNull(),
+  provider: text("provider", { enum: onlinePaymentProviders }).notNull(),
   eventId: text("event_id").notNull(),
   chargeId: uuid("charge_id").notNull().references(() => PaymentChargeTable.id, { onDelete: "cascade" }),
-}, (t) => [primaryKey({ columns: [t.companyId, t.provider, t.eventId] })]);
+}, (t) => [
+  primaryKey({ columns: [t.companyId, t.provider, t.eventId] }),
+  check("payment_webhook_events_provider_check", sql`${t.provider} in ('ASAAS','MERCADO_PAGO','SANDBOX')`),
+]);
 
 export const ClubBenefitUseTable = pgTable("club_benefit_uses", {
   companyId: uuid("company_id").notNull().references(() => CompanyTable.id, { onDelete: "cascade" }),

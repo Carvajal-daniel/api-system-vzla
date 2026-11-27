@@ -17,7 +17,7 @@ export async function assertNoPendingOrderCharge(tx: PaymentTransaction, company
   const [charge] = await tx.select({ id: PaymentChargeTable.id }).from(PaymentChargeTable).where(and(
     eq(PaymentChargeTable.companyId, companyId), eq(PaymentChargeTable.referenceType, "ORDER"),
     eq(PaymentChargeTable.referenceId, orderId), eq(PaymentChargeTable.status, "PENDING"),
-    or(eq(PaymentChargeTable.paymentProvider, "ASAAS"),
+    or(eq(PaymentChargeTable.paymentProvider, "ASAAS"), eq(PaymentChargeTable.paymentProvider, "MERCADO_PAGO"),
       and(eq(PaymentChargeTable.paymentProvider, "SANDBOX"),
         or(isNull(PaymentChargeTable.expiresAt), gt(PaymentChargeTable.expiresAt, new Date())))),
   )).limit(1);

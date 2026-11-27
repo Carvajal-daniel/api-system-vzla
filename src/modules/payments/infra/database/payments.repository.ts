@@ -12,9 +12,10 @@ import { getLocalDateTimeParts, localDateTimeToUtc, parseLocalDateString } from 
 import { hasOnlineOrderForAppointment } from "../../../finance/infra/database/repositories/online-order.js";
 import { FinancialDocumentTable, ReceiptTable } from "../../../finance/infra/database/schema/collections-schema.js";
 import { FinanceOrderPaymentTable, FinanceOrderTable } from "../../../finance/infra/database/schema/orders-schema.js";
-import type { ChargeReference, GatewayPaymentEvent, PaymentGatewayPort, PaymentProvider, SubscriptionMethod } from "../../domain/payment-gateway.js";
+import type { ChargeReference, GatewayPaymentEvent, PaymentGatewayPort, PaymentProvider, SubscriptionMethod, WebhookSignatureContext } from "../../domain/payment-gateway.js";
 import { missingPaymentResource, nextMonthlyDate, paymentConflict } from "../../domain/payment-policy.js";
 import { AsaasPaymentAdapter } from "../gateways/asaas-payment.adapter.js";
+import { MercadoPagoPaymentAdapter, mercadoPagoPayerEmail, type MercadoPagoWebhookTopic } from "../gateways/mercado-pago-payment.adapter.js";
 import { decryptPaymentSecret, encryptPaymentSecret } from "../gateways/payment-secrets.js";
 import { encodePixCode } from "../gateways/pix-code.js";
 import { SandboxPaymentAdapter } from "../gateways/sandbox-payment.adapter.js";
@@ -40,6 +41,9 @@ function gateway(config: Config): PaymentGatewayPort {
   if (config.paymentProvider === "SANDBOX" && sandboxAllowed()) return sandbox;
   if (config.paymentProvider === "ASAAS" && config.providerApiKeyEncrypted) {
     return new AsaasPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted));
+  }
+  if (config.paymentProvider === "MERCADO_PAGO" && config.providerApiKeyEncrypted) {
+    return new MercadoPagoPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted));
   }
   throw paymentConflict("PAYMENT_PROVIDER_UNAVAILABLE", "Configure um provedor de pagamentos ativo.");
 }
@@ -127,6 +131,7 @@ export class PaymentsRepository {
       const [plan] = await tx.select().from(SubscriptionPlanTable).where(and(
         eq(SubscriptionPlanTable.companyId, companyId), eq(SubscriptionPlanTable.id, input.planId), eq(SubscriptionPlanTable.active, true),
       ));
+      if (config.paymentProvider === "MERCADO_PAGO") mercadoPagoPayerEmail(client);
       if (!plan || plan.priceCents < 1) throw missingPaymentResource("SUBSCRIPTION_PLAN_NOT_AVAILABLE");
 
       const [existing] = await tx.select().from(ClientSubscriptionTable).where(and(
@@ -173,6 +178,9 @@ export class PaymentsRepository {
     return {
       paymentProvider: config.paymentProvider, staticPixKey: config.staticPixKey,
       hasProviderApiKey: !!config.providerApiKeyEncrypted, hasWebhookToken: !!config.webhookTokenEncrypted,
+      ...(config.paymentProvider === "MERCADO_PAGO"
+        ? { webhookPath: "/webhooks/payments/mercado-pago?companyId=" + config.companyId }
+        : {}),
     };
   }
 
@@ -183,10 +191,14 @@ export class PaymentsRepository {
     return db.transaction(async (tx) => {
       await lockTenant(tx, companyId);
       const previous = await configuration(tx, companyId);
-      const credential = input.providerApiKey ? encryptPaymentSecret(input.providerApiKey) : previous.providerApiKeyEncrypted;
-      const webhook = input.webhookToken ? encryptPaymentSecret(input.webhookToken) : previous.webhookTokenEncrypted;
+      const sameProvider = input.paymentProvider === previous.paymentProvider;
+      const credential = input.providerApiKey ? encryptPaymentSecret(input.providerApiKey) : sameProvider ? previous.providerApiKeyEncrypted : null;
+      const webhook = input.webhookToken ? encryptPaymentSecret(input.webhookToken) : sameProvider ? previous.webhookTokenEncrypted : null;
       if (input.paymentProvider === "ASAAS" && (!credential || !webhook)) {
         throw new PaymentError("Informe a chave da API e o token exclusivo do webhook.", "VALIDATION", "ASAAS_CREDENTIALS_REQUIRED");
+      }
+      if (input.paymentProvider === "MERCADO_PAGO" && (!credential || !webhook)) {
+        throw new PaymentError("Informe o Access Token e a chave secreta do webhook do Mercado Pago.", "VALIDATION", "MERCADO_PAGO_CREDENTIALS_REQUIRED");
       }
       if (input.paymentProvider === "SANDBOX" && !sandboxAllowed()) {
         throw paymentConflict("SANDBOX_DISABLED", "O sandbox está indisponível neste ambiente.");
@@ -220,11 +232,25 @@ export class PaymentsRepository {
       const config = await configuration(tx, companyId);
       if (company.currency !== "BRL") throw paymentConflict("PAYMENT_CURRENCY_UNSUPPORTED", "Pagamentos online usam BRL.");
       const client = await clientFor(tx, companyId, input.clientId);
+      if (config.paymentProvider === "MERCADO_PAGO") {
+        if (input.referenceType === "APPOINTMENT_DEPOSIT") {
+          throw paymentConflict("MERCADO_PAGO_DEPOSIT_EXPIRY_UNSUPPORTED", "O Pix do Mercado Pago tem validade mínima de 30 minutos.");
+        }
+        mercadoPagoPayerEmail(client);
+      }
       const ref = await this.referenceAmount(tx, companyId, input, client.phone, now);
       const filters = and(eq(PaymentChargeTable.companyId, companyId), eq(PaymentChargeTable.referenceType, input.referenceType), eq(PaymentChargeTable.referenceId, input.referenceId));
       const [pending] = await tx.select().from(PaymentChargeTable).where(and(filters, eq(PaymentChargeTable.status, "PENDING"))).for("update");
-      const expirable = pending?.expiresAt && pending.expiresAt <= now &&
-        (pending.paymentProvider !== "ASAAS" || pending.method === "PIX_STATIC");
+      let expirable = false;
+      if (pending?.expiresAt && pending.expiresAt <= now) {
+        if (pending.paymentProvider === "MERCADO_PAGO") {
+          // A payment approved just before expiry may still be waiting for its webhook.
+          expirable = !!pending.externalId && !!config.providerApiKeyEncrypted &&
+            await new MercadoPagoPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted)).isPixCanceled(pending.externalId);
+        } else {
+          expirable = pending.paymentProvider !== "ASAAS" || pending.method === "PIX_STATIC";
+        }
+      }
       if (pending && !expirable) {
         if (pending.clientId !== client.id || pending.amountCents !== ref.amountCents) {
           throw paymentConflict("PAYMENT_CHARGE_EXISTS", "Já existe uma cobrança para esta referência.");
@@ -306,6 +332,9 @@ export class PaymentsRepository {
         eq(ClientSubscriptionTable.companyId, companyId), eq(ClientSubscriptionTable.id, input.referenceId), eq(ClientSubscriptionTable.clientId, input.clientId),
       )).for("update");
       if (!subscription) throw missingPaymentResource("CLIENT_SUBSCRIPTION_NOT_FOUND");
+      if (subscription.paymentProvider === "MERCADO_PAGO") {
+        throw paymentConflict("MERCADO_PAGO_SUBSCRIPTION_USE_CHECKOUT", "Use o checkout da assinatura no Mercado Pago.");
+      }
       if (subscription.paymentMethod !== "PIX" || subscription.status === "CANCELED" || !subscription.externalSubscriptionId ||
         (subscription.currentPeriodEnd && subscription.currentPeriodEnd > now)) {
         throw paymentConflict("SUBSCRIPTION_NOT_PAYABLE", "A assinatura não possui ciclo em aberto para Pix.");
@@ -342,16 +371,43 @@ export class PaymentsRepository {
     return this.status(companyId, id);
   }
 
-  settle(provider: PaymentProvider, event: GatewayPaymentEvent, signature?: string, sandboxCompany?: string) {
+  settleAsaas(event: GatewayPaymentEvent, signature: string) {
+    return this.settle("ASAAS", event, signature);
+  }
+
+  async settleMercadoPago(topic: MercadoPagoWebhookTopic, headers: WebhookSignatureContext & { signature?: string | undefined }, companyId?: string) {
+    if (!companyId && topic === "payment") {
+      const matches = await db.select({ companyId: PaymentChargeTable.companyId }).from(PaymentChargeTable).where(and(
+        eq(PaymentChargeTable.paymentProvider, "MERCADO_PAGO"), eq(PaymentChargeTable.externalId, headers.resourceId),
+      )).limit(2);
+      if (matches.length === 1) companyId = matches[0]!.companyId;
+    }
+    const [config] = companyId ? await db.select().from(CompanyPaymentConfigTable).where(and(
+      eq(CompanyPaymentConfigTable.companyId, companyId), eq(CompanyPaymentConfigTable.paymentProvider, "MERCADO_PAGO"),
+    )) : [];
+    const token = config?.webhookTokenEncrypted && decryptPaymentSecret(config.webhookTokenEncrypted);
+    if (!config?.providerApiKeyEncrypted || !token) {
+      throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
+    }
+    const adapter = new MercadoPagoPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted));
+    if (!adapter.verifyWebhookSignature(headers.signature, token, headers)) {
+      throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
+    }
+    const event = await adapter.readWebhookPayment(topic, headers.resourceId);
+    return event ? this.settle("MERCADO_PAGO", event, undefined, config.companyId) : { processed: false };
+  }
+
+  private settle(provider: PaymentProvider, event: GatewayPaymentEvent, signature?: string, trustedCompanyId?: string) {
     return db.transaction(async (tx) => {
       const [initial] = await tx.select().from(PaymentChargeTable).where(and(
         eq(PaymentChargeTable.paymentProvider, provider),
-        sandboxCompany ? eq(PaymentChargeTable.companyId, sandboxCompany) : undefined,
+        trustedCompanyId ? eq(PaymentChargeTable.companyId, trustedCompanyId) : undefined,
         or(eq(PaymentChargeTable.externalId, event.staticQrCodeId ?? event.externalId),
           event.reference ? eq(PaymentChargeTable.txid, event.reference) : undefined),
       )).limit(1);
       const subscriptionFilter = event.externalSubscriptionId ? and(
         eq(ClientSubscriptionTable.paymentProvider, provider),
+        trustedCompanyId ? eq(ClientSubscriptionTable.companyId, trustedCompanyId) : undefined,
         or(eq(ClientSubscriptionTable.externalSubscriptionId, event.externalSubscriptionId),
           event.reference ? sql`${ClientSubscriptionTable.id}::text = ${event.reference}` : undefined),
       ) : undefined;
@@ -370,7 +426,7 @@ export class PaymentsRepository {
         if (!token || !new AsaasPaymentAdapter("").verifyWebhookSignature(signature, token)) {
           throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
         }
-      } else if (!sandboxAllowed() || sandboxCompany !== companyId) {
+      } else if (provider === "SANDBOX" && (!sandboxAllowed() || trustedCompanyId !== companyId)) {
         throw new PaymentError("Simulação indisponível.", "FORBIDDEN", "SANDBOX_DISABLED");
       }
 
@@ -434,7 +490,8 @@ export class PaymentsRepository {
   private async activateSubscription(tx: PaymentTransaction, companyId: string, id: string, event: GatewayPaymentEvent) {
     const match = and(eq(ClientSubscriptionTable.companyId, companyId), eq(ClientSubscriptionTable.id, id));
     const [subscription] = await tx.select().from(ClientSubscriptionTable).where(match).for("update");
-    if (!subscription || subscription.status === "CANCELED" || subscription.paymentMethod !== event.method ||
+    if (!subscription || subscription.status === "CANCELED" ||
+      (subscription.paymentProvider !== "MERCADO_PAGO" && subscription.paymentMethod !== event.method) ||
       (event.externalSubscriptionId && subscription.externalSubscriptionId !== event.externalSubscriptionId)) {
       throw paymentConflict("SUBSCRIPTION_EVENT_MISMATCH", "A confirmação não corresponde à assinatura.");
     }
@@ -445,7 +502,7 @@ export class PaymentsRepository {
     const currentPeriodStart = localMidnight(due, company.timezone);
     const currentPeriodEnd = localMidnight(next, company.timezone);
     await tx.update(ClientSubscriptionTable).set({
-      status: "ACTIVE", currentPeriodStart, currentPeriodEnd, nextBillingDate: next,
+      status: "ACTIVE", currentPeriodStart, currentPeriodEnd, nextBillingDate: next, paymentMethod: event.method,
     }).where(match);
     await refreshOverdue(tx, company.id, new Date());
   }

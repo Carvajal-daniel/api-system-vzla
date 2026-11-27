@@ -1,5 +1,5 @@
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import fastify from "fastify";
 import jwt from "jsonwebtoken";
@@ -42,6 +42,7 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
 
   beforeAll(async () => {
     vi.stubEnv("JWT_SECRET", jwtSecret);
+    vi.stubEnv("MERCADO_PAGO_BACK_URL", "https://app.example.test/assinatura");
     vi.stubEnv("PAYMENT_ENCRYPTION_KEY", "temporary-test-encryption-key-of-32-characters");
     registerErrorHandler(app);
     await app.register(paymentRoutes);
@@ -55,7 +56,7 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
     headers = { authorization: "Bearer " + jwt.sign({ sub: companyId, companyId, role: "OWNER" }, jwtSecret) };
     await db.insert(CompanyTable).values({ id: companyId, name: "Owner", companyName: "Pagamento teste",
       email: companyId + "@example.test", phone, password: "fixture", timezone: "UTC" });
-    await db.insert(ClientTable).values({ id: clientId, companyId, name: "Cliente teste", phone });
+    await db.insert(ClientTable).values({ id: clientId, companyId, name: "Cliente teste", phone, email: "payer@example.test" });
     await db.insert(ServiceTable).values({ id: serviceId, companyId, name: "Corte", priceInCents: 5000, durationMinutes: 30 });
     await db.insert(CollaboratorTable).values({ id: professionalId, companyId, name: "Profissional", specialty: "Corte",
       commissionPercentage: 30, email: professionalId + "@example.test", password: "fixture", phone });
@@ -65,6 +66,7 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await db.delete(PaymentChargeTable).where(eq(PaymentChargeTable.companyId, companyId));
     await db.delete(FinanceOrderTable).where(eq(FinanceOrderTable.companyId, companyId));
     await db.delete(AppointmentTable).where(eq(AppointmentTable.companyId, companyId));
@@ -90,7 +92,7 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
     const result = await app.inject({ method: "POST", url: "/client-subscriptions", headers,
       payload: { planId, clientId, paymentMethod: "PIX" } });
     expect(result.statusCode, result.body).toBe(201);
-    return result.json<{ id: string; status: string; externalSubscriptionId: string }>();
+    return result.json<{ id: string; status: string; externalSubscriptionId: string; checkoutUrl?: string }>();
   }
 
   async function charge(referenceType: string, referenceId: string, amountCents?: number) {
@@ -123,6 +125,92 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
     ));
     return row;
   }
+
+  async function configureMercadoPago() {
+    const config = await app.inject({ method: "PUT", url: "/payments/config", headers, payload: {
+      paymentProvider: "MERCADO_PAGO", providerApiKey: "test-mercado-pago-access-token", webhookToken: hookToken,
+    } });
+    expect(config.statusCode, config.body).toBe(200);
+    expect(config.json()).toMatchObject({
+      paymentProvider: "MERCADO_PAGO", webhookPath: "/webhooks/payments/mercado-pago?companyId=" + companyId,
+    });
+    expect(config.json()).not.toHaveProperty("providerApiKeyEncrypted");
+  }
+
+  function mercadoPagoWebhook(type: string, resourceId: string, input: { secret?: string; bodyId?: string; includeCompany?: boolean } = {}) {
+    const requestId = randomUUID();
+    const timestamp = String(Date.now());
+    const signature = createHmac("sha256", input.secret ?? hookToken)
+      .update("id:" + resourceId.toLowerCase() + ";request-id:" + requestId + ";ts:" + timestamp + ";").digest("hex");
+    const url = "/webhooks/payments/mercado-pago?data.id=" + resourceId +
+      (input.includeCompany === false ? "" : "&companyId=" + companyId);
+    return app.inject({ method: "POST", url,
+      headers: { "x-request-id": requestId, "x-signature": "ts=" + timestamp + ",v1=" + signature },
+      payload: { type, status: "approved", data: { id: input.bodyId ?? resourceId } },
+    });
+  }
+
+  it("settles a Mercado Pago Pix order once using the payment fetched from the provider", async () => {
+    await configureMercadoPago();
+    let reference = "";
+    let status = "pending";
+    const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      expect(options?.headers).toMatchObject({ Authorization: "Bearer test-mercado-pago-access-token" });
+      if (String(url).endsWith("/v1/payments") && options?.method === "POST") {
+        const data = JSON.parse(String(options.body));
+        reference = data.external_reference;
+        expect(options?.headers).toMatchObject({ "X-Idempotency-Key": reference });
+        return Response.json({ id: 502, date_of_expiration: data.date_of_expiration,
+          point_of_interaction: { transaction_data: { qr_code: "mp-pix", qr_code_base64: "encoded-mp" } } });
+      }
+      expect(String(url)).toBe("https://api.mercadopago.com/v1/payments/502");
+      return Response.json({ id: 502, status, transaction_amount: 50, currency_id: "BRL",
+        payment_method_id: "pix", external_reference: reference, date_approved: new Date().toISOString() });
+    });
+    const saved = await order();
+    const pix = await charge("ORDER", saved.id);
+    expect(pix).toMatchObject({ txid: reference, pixCopyPaste: "mp-pix", pixQrCodeBase64: "encoded-mp" });
+    expect((await mercadoPagoWebhook("payment", "502", { secret: "wrong" })).statusCode).toBe(403);
+    expect((await mercadoPagoWebhook("payment", "502", { bodyId: "999" })).statusCode).toBe(403);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect((await mercadoPagoWebhook("payment", "502", { includeCompany: false })).json()).toEqual({ processed: false });
+    status = "approved";
+    expect((await mercadoPagoWebhook("payment", "502")).json()).toEqual({ processed: true });
+    expect((await mercadoPagoWebhook("payment", "502")).json()).toEqual({ processed: false });
+    expect(await orders.getOrderById(companyId, saved.id)).toMatchObject({ status: "CLOSED", paidCents: 5000 });
+    expect((await telemetry())?.gmvCents).toBe(5000);
+  });
+
+  it("persists a Mercado Pago checkout and activates the club only after its invoice payment is approved", async () => {
+    await configureMercadoPago();
+    const checkoutUrl = "https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=sub123";
+    let reference = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/preapproval/search") return Response.json({ results: [] });
+      if (path === "/preapproval") {
+        const data = JSON.parse(String(options?.body));
+        expect(data.status).toBe("pending");
+        reference = data.external_reference;
+        return Response.json({ id: "sub123", init_point: checkoutUrl });
+      }
+      if (path === "/authorized_payments/777") return Response.json({
+        id: 777, preapproval_id: "sub123", external_reference: reference, debit_date: new Date().toISOString(),
+        payment: { id: 888, status: "approved" },
+      });
+      expect(path).toBe("/v1/payments/888");
+      return Response.json({ id: 888, status: "approved", currency_id: "BRL", transaction_amount: 99,
+        payment_type_id: "credit_card", date_approved: new Date().toISOString() });
+    });
+    const subscribed = await enroll((await newPlan()).id);
+    expect(subscribed).toMatchObject({ id: reference, checkoutUrl, status: "PENDING_PAYMENT" });
+    expect((await telemetry())?.activeClubSubscribers).toBe(0);
+    expect((await mercadoPagoWebhook("subscription_authorized_payment", "777")).json()).toEqual({ processed: true });
+    expect((await mercadoPagoWebhook("subscription_authorized_payment", "777")).json()).toEqual({ processed: false });
+    const list = await app.inject({ method: "GET", url: "/client-subscriptions?status=ACTIVE", headers });
+    expect(list.json()).toEqual([expect.objectContaining({ id: reference, paymentMethod: "CREDIT_CARD" })]);
+    expect((await telemetry())?.activeClubSubscribers).toBe(1);
+  });
 
   it("creates, lists, updates and deactivates a tenant's plan", async () => {
     const plan = await newPlan();

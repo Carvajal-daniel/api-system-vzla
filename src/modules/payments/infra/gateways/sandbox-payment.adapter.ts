@@ -15,6 +15,7 @@ export class SandboxPaymentAdapter implements PaymentGatewayPort {
     return {
       // The sandbox address is intentionally non-routable so a simulated charge cannot move real money.
       ...await encodePixCode("pix@example.invalid", "SANDBOX TESTE", input.amountCents, input.txid),
+      txid: input.txid,
       externalId: input.txid,
       expiresAt: input.expiresAt,
       method: "PIX_DYNAMIC" as const,

@@ -62,7 +62,7 @@ export class AsaasPaymentAdapter implements PaymentGatewayPort {
           expirationSeconds: Math.max(1, Math.floor((input.expiresAt.getTime() - Date.now()) / 1000)),
           allowsMultiplePayments: false, externalReference: input.txid,
         }));
-      return { externalId: qr.id, pixQrCodeBase64: qr.encodedImage, pixCopyPaste: qr.payload, expiresAt: input.expiresAt, method: "PIX_STATIC" as const };
+      return { txid: input.txid, externalId: qr.id, pixQrCodeBase64: qr.encodedImage, pixCopyPaste: qr.payload, expiresAt: input.expiresAt, method: "PIX_STATIC" as const };
     }
 
     const payment = input.externalSubscriptionId
@@ -79,7 +79,7 @@ export class AsaasPaymentAdapter implements PaymentGatewayPort {
     const expiration = code.expirationDate.replace(" ", "T");
     const expiresAt = new Date(expiration.length === 19 ? expiration + "-03:00" : expiration);
     if (!Number.isFinite(expiresAt.getTime())) throw new Error("Asaas returned an invalid expiration date");
-    return { externalId: payment.id, pixQrCodeBase64: code.encodedImage, pixCopyPaste: code.payload, expiresAt, method: "PIX_DYNAMIC" as const };
+    return { txid: input.txid, externalId: payment.id, pixQrCodeBase64: code.encodedImage, pixCopyPaste: code.payload, expiresAt, method: "PIX_DYNAMIC" as const };
   }
 
   async createRecurringSubscription(input: Parameters<PaymentGatewayPort["createRecurringSubscription"]>[0]) {

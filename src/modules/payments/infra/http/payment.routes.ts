@@ -31,6 +31,10 @@ const newPlan = planFields.extend({
   active: planFields.shape.active.default(true),
 });
 
+const mercadoPagoId = z.union([z.string().regex(/^[a-z0-9]{1,160}$/i), z.number().int().positive()]).transform(String);
+const mercadoPagoNotification = z.object({ type: z.string(), data: z.object({ id: mercadoPagoId }).optional() });
+const mercadoPagoQuery = z.object({ "data.id": mercadoPagoId, companyId: z.uuid().optional() });
+
 const webhookEnvelope = z.object({ event: z.string(), id: z.string().min(1).max(160), dateCreated: z.string().optional(), payment: z.unknown() });
 const asaasPayment = z.object({
   id: z.string().min(1).max(160),
@@ -105,6 +109,18 @@ export async function paymentRoutes(app: FastifyInstance) {
 
   app.post("/webhooks/payments/:provider", async (request) => {
     const { provider } = z.object({ provider: z.string().toUpperCase() }).parse(request.params);
+    if (provider === "MERCADO-PAGO") {
+      const { type, data } = mercadoPagoNotification.parse(request.body);
+      if (type !== "payment" && type !== "subscription_authorized_payment") return { processed: false };
+      const { "data.id": resourceId, companyId } = mercadoPagoQuery.parse(request.query);
+      const requestId = request.headers["x-request-id"];
+      const signature = request.headers["x-signature"];
+      if (typeof requestId !== "string" || !requestId || typeof signature !== "string" ||
+        (data && data.id.toLowerCase() !== resourceId.toLowerCase())) {
+        throw new PaymentError("Assinatura de webhook inválida.", "FORBIDDEN", "PAYMENT_WEBHOOK_INVALID_SIGNATURE");
+      }
+      return repository.settleMercadoPago(type, { resourceId, requestId, signature }, companyId);
+    }
     if (provider !== "ASAAS") throw new PaymentError("Provedor de webhook inválido.", "NOT_FOUND", "PAYMENT_PROVIDER_NOT_FOUND");
     const envelope = webhookEnvelope.parse(request.body);
     if (envelope.event !== "PAYMENT_RECEIVED" && envelope.event !== "PAYMENT_CONFIRMED") return { processed: false };
@@ -113,7 +129,7 @@ export async function paymentRoutes(app: FastifyInstance) {
     const payment = asaasPayment.safeParse(envelope.payment);
     if (!payment.success) return { processed: false };
     const data = payment.data;
-    return repository.settle("ASAAS", {
+    return repository.settleAsaas({
       eventId: envelope.id, externalId: data.id, externalSubscriptionId: data.subscription ?? undefined,
       staticQrCodeId: data.pixQrCodeId ?? undefined, reference: data.externalReference ?? undefined,
       amountCents: Math.round(data.value * 100), method: data.billingType,

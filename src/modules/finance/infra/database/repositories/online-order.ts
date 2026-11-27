@@ -30,6 +30,6 @@ export function hasOnlineOrderForAppointment(companyId: string | AnyPgColumn, ap
       ${exceptOrderId ? sql`and ${qualified(linked.id)} <> ${exceptOrderId}` : sql.empty()}
       and ${qualified(charges.referenceType)} = 'ORDER'
       and (online_charge.status = 'CONFIRMED' or (${includePending} and online_charge.status = 'PENDING' and
-        (online_charge.payment_provider = 'ASAAS' or (online_charge.payment_provider = 'SANDBOX' and online_charge.expires_at > now()))))
+        (online_charge.payment_provider in ('ASAAS', 'MERCADO_PAGO') or (online_charge.payment_provider = 'SANDBOX' and online_charge.expires_at > now()))))
   )`;
 }
