@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { DomainError } from "../../../shared/Errors/domain-error.js";
 import { Phone } from "../../../shared/value-objects/phone.value-object.js";
 import type { AppointmentOutputDTO } from "../../appointments/application/dtos/appointment.dtos.js";
 import type { GetAvailabilityOutputDTO } from "../../appointments/application/dtos/availability.dtos.js";
@@ -11,7 +12,9 @@ import type { PublicCatalogServiceOutputDTO } from "../../services/application/d
 import type { ListPublicCompanyCatalogUseCase } from "../../services/application/use-cases/list-public-company-catalog.use-case.js";
 import {
   PublicPortalCompanyNotFoundError,
+  PublicPortalDocumentRequiredError,
   PublicPortalPaymentProviderUnavailableError,
+  PublicPortalPixChargeError,
 } from "../domain/public-portal.errors.js";
 import type {
   PublicActiveSubscriptionCoverage,
@@ -50,6 +53,7 @@ export interface PublicStorefrontOutputDTO {
 
 export interface IdentifyCustomerOutputDTO {
   recognized: boolean;
+  customerName: string | null;
   isSubscriber: boolean;
   subscription: {
     planId: string;
@@ -236,6 +240,7 @@ export class PublicPortalService {
     if (!active || !coverage) {
       return {
         recognized: Boolean(client),
+        customerName: client?.name ?? null,
         isSubscriber: false,
         subscription: null,
       };
@@ -249,6 +254,7 @@ export class PublicPortalService {
 
     return {
       recognized: Boolean(client) || active,
+      customerName: client?.name ?? null,
       isSubscriber: true,
       subscription: {
         planId: coverage.planId,
@@ -325,7 +331,7 @@ export class PublicPortalService {
       collaboratorId: input.collaboratorId,
       startsAt: input.startsAt,
       clientName: trimmedName,
-      clientPhone: normalizedPhone,
+      clientPhone: client.phone,
       initialStatus: shouldChargeDeposit ? "PENDING" : "CONFIRMED",
       payFullPrice: !coveredByClub,
       publicDetails: {
@@ -368,7 +374,42 @@ export class PublicPortalService {
         appointment.id,
         "Falha ao gerar cobrança Pix do sinal no portal público.",
       );
-      throw error;
+
+      // Nunca mascarar falha de cobrança Pix: traduzir documento obrigatório em 422
+      // e propagar o motivo real do gateway em 422 ou 502.
+      if (error instanceof DomainError) {
+        if (
+          error.reasonCode === "PAYMENT_CUSTOMER_DOCUMENT_REQUIRED" ||
+          error.reasonCode === "DOCUMENT_REQUIRED_FOR_PIX"
+        ) {
+          throw new PublicPortalDocumentRequiredError();
+        }
+        if (
+          error.code === "BAD_GATEWAY" ||
+          error.reasonCode === "ASAAS_REQUEST_FAILED"
+        ) {
+          throw new PublicPortalPixChargeError(
+            error.message,
+            "BAD_GATEWAY",
+            error.reasonCode ?? "PIX_GATEWAY_ERROR",
+          );
+        }
+        throw new PublicPortalPixChargeError(
+          error.message,
+          "UNPROCESSABLE_ENTITY",
+          error.reasonCode ?? "PIX_DEPOSIT_FAILED",
+        );
+      }
+
+      const fallbackMessage =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : "Falha ao gerar cobrança Pix do sinal no provedor de pagamentos.";
+      throw new PublicPortalPixChargeError(
+        fallbackMessage,
+        "BAD_GATEWAY",
+        "PIX_GATEWAY_ERROR",
+      );
     }
   }
 

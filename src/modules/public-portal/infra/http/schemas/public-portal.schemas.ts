@@ -199,9 +199,10 @@ export const publicStorefrontResponseOpenApiSchema = {
 
 export const publicIdentifyResponseOpenApiSchema = {
   type: "object",
-  required: ["recognized", "isSubscriber", "subscription"],
+  required: ["recognized", "customerName", "isSubscriber", "subscription"],
   properties: {
     recognized: { type: "boolean" },
+    customerName: { type: "string", nullable: true },
     isSubscriber: { type: "boolean" },
     subscription: {
       type: "object",

@@ -3,7 +3,9 @@ export type DomainErrorCode =
   | "UNAUTHORIZED"
   | "FORBIDDEN"
   | "NOT_FOUND"
-  | "CONFLICT";
+  | "CONFLICT"
+  | "UNPROCESSABLE_ENTITY"
+  | "BAD_GATEWAY";
 
 export abstract class DomainError extends Error {
   constructor(

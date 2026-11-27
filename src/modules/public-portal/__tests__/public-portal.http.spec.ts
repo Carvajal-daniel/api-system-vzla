@@ -21,7 +21,7 @@ import {
   type WaitlistEntryRecord,
   type WaitlistRepositoryPort,
 } from "../../operations/application/waitlist.use-case.js";
-import { missingPaymentResource } from "../../payments/domain/payment-policy.js";
+import { PaymentError, missingPaymentResource } from "../../payments/domain/payment-policy.js";
 import { InMemoryCollaboratorLookupRepository } from "../../services/application/__tests__/in-memory-collaborator-lookup.repository.js";
 import { InMemoryCollaboratorServicesRepository } from "../../services/application/__tests__/in-memory-collaborator-services.repository.js";
 import { InMemoryCompanyLookupRepository } from "../../services/application/__tests__/in-memory-company-lookup.repository.js";
@@ -163,6 +163,7 @@ class InMemoryPublicPortalPaymentsPort implements PublicPortalPaymentsPort {
     string,
     { companyId: string; status: PublicPaymentStatusDTO }
   >();
+  public nextDepositError: Error | null = null;
 
   async createDepositPix(input: {
     companyId: string;
@@ -171,6 +172,11 @@ class InMemoryPublicPortalPaymentsPort implements PublicPortalPaymentsPort {
     amountCents: number;
     document?: string | undefined;
   }): Promise<PublicPaymentChargeDTO> {
+    if (this.nextDepositError) {
+      const error = this.nextDepositError;
+      this.nextDepositError = null;
+      throw error;
+    }
     const paymentId = randomUUID();
     const expiresAt = new Date("2030-05-14T12:15:00.000Z").toISOString();
     this.charges.set(paymentId, {
@@ -636,6 +642,7 @@ describe("Public Booking Portal (/public/:slug/*)", () => {
     const body = resE164.json();
     expect(body).toEqual({
       recognized: true,
+      customerName: "Carlos Assinante",
       isSubscriber: true,
       subscription: {
         planId: clubPlanId,
@@ -743,6 +750,92 @@ describe("Public Booking Portal (/public/:slug/*)", () => {
       code: "PAYMENT_PROVIDER_UNAVAILABLE",
     });
     expect(appointmentsRepo.items).toHaveLength(0);
+  });
+
+  it("POST /public/:slug/identify returns customerName for existing clients and null otherwise", async () => {
+    readPort.clients.set(`${companyId}:+558592182910`, {
+      id: randomUUID(),
+      name: "Daniel Cliente",
+      phone: "+558592182910",
+    });
+
+    const known = await app.inject({
+      method: "POST",
+      url: "/public/barbearia-corte-fino/identify",
+      payload: { phone: "+558592182910" },
+    });
+    expect(known.statusCode).toBe(200);
+    expect(known.json()).toMatchObject({
+      recognized: true,
+      customerName: "Daniel Cliente",
+      isSubscriber: false,
+    });
+
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/public/barbearia-corte-fino/identify",
+      payload: { phone: "+5511911112222" },
+    });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.json()).toMatchObject({
+      recognized: false,
+      customerName: null,
+      isSubscriber: false,
+    });
+  });
+
+  it("POST /public/:slug/appointments returns 422 DOCUMENT_REQUIRED_FOR_PIX when gateway requires CPF and cancels pending slot", async () => {
+    paymentsPort.nextDepositError = new PaymentError(
+      "Informe CPF ou CNPJ para cadastrar o cliente no Asaas.",
+      "VALIDATION",
+      "PAYMENT_CUSTOMER_DOCUMENT_REQUIRED",
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/public/barbearia-corte-fino/appointments",
+      payload: {
+        serviceId: serviceCutId,
+        collaboratorId,
+        startsAt: slot10hUtc.toISOString(),
+        clientName: "Cliente Sem CPF",
+        clientPhone: "+5511933334444",
+      },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      code: "DOCUMENT_REQUIRED_FOR_PIX",
+      message: "Informe seu CPF para gerar o Pix do sinal.",
+    });
+    expect(readPort.canceledAppointments).toHaveLength(1);
+  });
+
+  it("POST /public/:slug/appointments returns 502 with real gateway failure message instead of silent cancellation", async () => {
+    paymentsPort.nextDepositError = new PaymentError(
+      "Chave Pix inválida na conta Asaas.",
+      "BAD_GATEWAY",
+      "ASAAS_REQUEST_FAILED",
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/public/barbearia-corte-fino/appointments",
+      payload: {
+        serviceId: serviceCutId,
+        collaboratorId,
+        startsAt: slot10hUtc.toISOString(),
+        clientName: "Cliente Erro Gateway",
+        clientPhone: "+5511922223333",
+      },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      code: "ASAAS_REQUEST_FAILED",
+      message: "Chave Pix inválida na conta Asaas.",
+    });
+    expect(readPort.canceledAppointments).toHaveLength(1);
   });
 
   it("POST /public/:slug/club/subscribe enrolls customer and returns standardized Pix payment payload", async () => {

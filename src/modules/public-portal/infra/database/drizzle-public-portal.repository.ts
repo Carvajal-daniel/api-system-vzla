@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { db } from "../../../../shared/database/database.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
 import {
@@ -39,6 +39,33 @@ function isOnlineProviderOperational(provider: CompanyPaymentProvider): boolean 
     return ["development", "test"].includes(process.env.NODE_ENV ?? "development");
   }
   return true;
+}
+
+// Compara telefones brasileiros de forma flexível (com/sem +55 e 10 ou 11 dígitos)
+// para reconhecer clientes e assinaturas independentemente da formatação salva no banco.
+function buildFlexiblePhoneMatch(column: AnyColumn, normalizedPhone: string): SQL {
+  const digits = normalizedPhone.replace(/\D/g, "");
+  const dbDigits = sql`REGEXP_REPLACE(${column}, '\\D', '', 'g')`;
+  const conditions: SQL[] = [eq(column, normalizedPhone)];
+
+  if (digits.length >= 10) {
+    const last10 = digits.slice(-10);
+    conditions.push(sql`RIGHT(${dbDigits}, 10) = ${last10}`);
+  }
+
+  if (digits.length >= 11) {
+    const last11 = digits.slice(-11);
+    conditions.push(sql`RIGHT(${dbDigits}, 11) = ${last11}`);
+  }
+
+  return or(...conditions)!;
+}
+
+function buildPhoneMatchPriority(column: AnyColumn, normalizedPhone: string): SQL {
+  const digits = normalizedPhone.replace(/\D/g, "");
+  const dbDigits = sql`REGEXP_REPLACE(${column}, '\\D', '', 'g')`;
+  const last11 = digits.length >= 11 ? digits.slice(-11) : "";
+  return sql`CASE WHEN ${column} = ${normalizedPhone} THEN 0 WHEN ${last11} <> '' AND RIGHT(${dbDigits}, 11) = ${last11} THEN 1 ELSE 2 END`;
 }
 
 export class DrizzlePublicPortalRepository implements PublicPortalReadPort {
@@ -148,9 +175,10 @@ export class DrizzlePublicPortalRepository implements PublicPortalReadPort {
       .where(
         and(
           eq(ClientTable.companyId, companyId),
-          eq(ClientTable.phone, normalizedPhone),
+          buildFlexiblePhoneMatch(ClientTable.phone, normalizedPhone),
         ),
       )
+      .orderBy(buildPhoneMatchPriority(ClientTable.phone, normalizedPhone))
       .limit(1);
 
     return row ?? null;
@@ -224,12 +252,15 @@ export class DrizzlePublicPortalRepository implements PublicPortalReadPort {
       .where(
         and(
           eq(ClientSubscriptionTable.companyId, companyId),
-          eq(ClientTable.phone, normalizedPhone),
+          buildFlexiblePhoneMatch(ClientTable.phone, normalizedPhone),
           ne(ClientSubscriptionTable.status, "PENDING_PAYMENT"),
           ne(ClientSubscriptionTable.status, "CANCELED"),
         ),
       )
-      .orderBy(desc(ClientSubscriptionTable.currentPeriodEnd))
+      .orderBy(
+        buildPhoneMatchPriority(ClientTable.phone, normalizedPhone),
+        desc(ClientSubscriptionTable.currentPeriodEnd),
+      )
       .limit(1);
 
     if (current) {
@@ -294,10 +325,11 @@ export class DrizzlePublicPortalRepository implements PublicPortalReadPort {
       .where(
         and(
           eq(ClubSubscriptionTable.companyId, companyId),
-          eq(ClubSubscriptionTable.clientPhone, normalizedPhone),
+          buildFlexiblePhoneMatch(ClubSubscriptionTable.clientPhone, normalizedPhone),
           ne(ClubSubscriptionTable.status, "CANCELED"),
         ),
       )
+      .orderBy(buildPhoneMatchPriority(ClubSubscriptionTable.clientPhone, normalizedPhone))
       .limit(1);
 
     if (!legacy) return null;

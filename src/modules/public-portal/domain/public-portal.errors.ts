@@ -19,3 +19,23 @@ export class PublicPortalPaymentProviderUnavailableError extends DomainError {
     );
   }
 }
+
+export class PublicPortalDocumentRequiredError extends DomainError {
+  constructor() {
+    super(
+      "Informe seu CPF para gerar o Pix do sinal.",
+      "UNPROCESSABLE_ENTITY",
+      "DOCUMENT_REQUIRED_FOR_PIX",
+    );
+  }
+}
+
+export class PublicPortalPixChargeError extends DomainError {
+  constructor(
+    message: string,
+    code: "UNPROCESSABLE_ENTITY" | "BAD_GATEWAY" = "BAD_GATEWAY",
+    reasonCode = "PIX_DEPOSIT_FAILED",
+  ) {
+    super(message, code, reasonCode);
+  }
+}

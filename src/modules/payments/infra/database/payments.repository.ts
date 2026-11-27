@@ -344,8 +344,15 @@ export class PaymentsRepository {
 
     const [appointment] = await tx.select().from(AppointmentTable).where(and(eq(AppointmentTable.companyId, companyId), eq(AppointmentTable.id, input.referenceId))).for("update");
     if (!appointment) throw missingPaymentResource("APPOINTMENT_NOT_FOUND");
+    const appointmentDigits = appointment.clientPhone.replace(/\D/g, "");
+    const clientDigits = phone.replace(/\D/g, "");
+    const phonesMatch =
+      appointment.clientPhone === phone ||
+      (appointmentDigits.length >= 10 &&
+        clientDigits.length >= 10 &&
+        appointmentDigits.slice(-10) === clientDigits.slice(-10));
     if (appointment.status !== "PENDING" || appointment.startsAt.getTime() < now.getTime() + 900_000 ||
-      appointment.clientPhone !== phone || !input.amountCents || input.amountCents > appointment.servicePriceInCentsSnapshot) {
+      !phonesMatch || !input.amountCents || input.amountCents > appointment.servicePriceInCentsSnapshot) {
       throw paymentConflict("DEPOSIT_NOT_PAYABLE", "Informe um sinal válido para a pré-reserva deste cliente.");
     }
     return { amountCents: input.amountCents };

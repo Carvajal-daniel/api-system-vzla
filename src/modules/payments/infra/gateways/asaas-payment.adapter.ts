@@ -24,10 +24,21 @@ export class AsaasPaymentAdapter implements PaymentGatewayPort {
         signal: AbortSignal.timeout(timeout),
       });
       if (response.ok) return await response.json() as unknown;
-    } catch {
+      // Extrai a mensagem real retornada pelo Asaas para não mascarar o motivo da recusa no portal público.
+      const errorPayload = await response.json().catch(() => null) as {
+        errors?: Array<{ description?: string }>;
+        message?: string;
+      } | null;
+      const gatewayMessage =
+        errorPayload?.errors?.[0]?.description?.trim() ||
+        errorPayload?.message?.trim() ||
+        "Falha ao consultar o provedor de pagamentos.";
+      throw new PaymentError(gatewayMessage, "BAD_GATEWAY", "ASAAS_REQUEST_FAILED");
+    } catch (error) {
+      if (error instanceof PaymentError) throw error;
       // A transport error can have an unknown outcome. The caller retries with the same external reference.
     }
-    throw new PaymentError("Falha ao consultar o provedor de pagamentos.", "CONFLICT", "ASAAS_REQUEST_FAILED");
+    throw new PaymentError("Falha ao consultar o provedor de pagamentos.", "BAD_GATEWAY", "ASAAS_REQUEST_FAILED");
   }
 
   private async existing(path: string, reference: string) {

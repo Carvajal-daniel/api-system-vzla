@@ -249,6 +249,8 @@ export async function publicPortalRoutes(
           400: publicErrorOpenApiSchema,
           404: publicErrorOpenApiSchema,
           409: publicErrorOpenApiSchema,
+          422: publicErrorOpenApiSchema,
+          502: publicErrorOpenApiSchema,
         },
       },
     },
