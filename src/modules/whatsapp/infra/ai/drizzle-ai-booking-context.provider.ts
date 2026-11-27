@@ -4,6 +4,8 @@ import { db } from "../../../../shared/database/database.js";
 import { Phone } from "../../../../shared/value-objects/phone.value-object.js";
 import { CreateAppointmentUseCase } from "../../../appointments/application/use-cases/create-appointment.use-case.js";
 import { GetAvailabilityUseCase } from "../../../appointments/application/use-cases/get-availability.use-case.js";
+import { SubscriptionPlanTable } from "../../../appointments/infra/database/schema/subscription-plans-schema.js";
+import { AppointmentPolicyError } from "../../../appointments/domain/services/appointment-policy.service.js";
 import { RescheduleAppointmentUseCase } from "../../../appointments/application/use-cases/reschedule-appointment.use-case.js";
 import { UpdateAppointmentStatusUseCase } from "../../../appointments/application/use-cases/update-appointment-status.use-case.js";
 import { AppointmentTimeConflictError } from "../../../appointments/domain/errors/appointment-errors.js";
@@ -199,7 +201,7 @@ export class DrizzleAiBookingContextProvider
     collaborators: AiBookingCollaboratorSummary[];
     subscriptionPlans: AiBookingSubscriptionPlansResult;
   }> {
-    const [servicesRows, collaboratorsRows, linksRows, popularityRows, settingsRows] =
+    const [servicesRows, collaboratorsRows, linksRows, popularityRows, settingsRows, clubPlans] =
       await Promise.all([
         db
           .select({
@@ -256,6 +258,13 @@ export class DrizzleAiBookingContextProvider
           .from(CompanySettingsTable)
           .where(eq(CompanySettingsTable.companyId, companyId))
           .limit(1),
+        db.select({
+          id: SubscriptionPlanTable.id,
+          name: SubscriptionPlanTable.name,
+          allowedDaysOfWeek: SubscriptionPlanTable.allowedDaysOfWeek,
+        }).from(SubscriptionPlanTable)
+          .where(eq(SubscriptionPlanTable.companyId, companyId))
+          .orderBy(asc(SubscriptionPlanTable.name)),
       ]);
 
     const serviceIdsByCollaborator = new Map<string, string[]>();
@@ -295,11 +304,11 @@ export class DrizzleAiBookingContextProvider
     const packageSales = settingsRows[0]?.preferences?.packageSales ?? null;
     const planServices = services.filter((s) => isSubscriptionPlanService(s));
     const subscriptionPlans: AiBookingSubscriptionPlansResult = {
-      enabled: Boolean(packageSales?.enabled) || planServices.length > 0,
+      enabled: Boolean(packageSales?.enabled) || clubPlans.length > 0 || planServices.length > 0,
       notes: packageSales?.enabled
         ? packageSales.notes?.trim() || null
         : null,
-      plans: planServices.map((s) => ({
+      plans: clubPlans.length > 0 ? clubPlans : planServices.map((s) => ({
         id: s.id,
         name: s.name,
         description: s.description ?? null,
@@ -766,6 +775,8 @@ export class DrizzleAiBookingContextProvider
         localTime,
         clientName,
         notes,
+        isGuest,
+        payFullPrice,
       }) => {
         const normalizedCollaboratorId = collaboratorId.trim();
         const parsedStartsAt = parseStartsAtInCompanyTimezone(startsAt);
@@ -784,8 +795,7 @@ export class DrizzleAiBookingContextProvider
           );
         }
 
-        // Trava obrigatória de disponibilidade: valida contra GetAvailabilityUseCase se o slot exato
-        // (profissional + serviço + data/hora local) está realmente livre antes de tentar gravar no banco.
+        // O caso de uso valida o expediente e o repositório verifica o slot dentro da transação.
         const loadAvailableSlots = async () => {
           const availability = await this.getAvailabilityUseCase.execute({
             companyId,
@@ -801,24 +811,6 @@ export class DrizzleAiBookingContextProvider
           }));
         };
 
-        const availableSlots = await loadAvailableSlots();
-        const requestedStartsAtMs = parsedStartsAt.getTime();
-        const isSlotFree = availableSlots.some(
-          (slot) =>
-            slot.collaboratorId === normalizedCollaboratorId &&
-            new Date(slot.startsAt).getTime() === requestedStartsAtMs &&
-            slot.localDate === actualLocal.localDate &&
-            slot.localTime === actualLocal.localTime,
-        );
-
-        if (!isSlotFree) {
-          return {
-            success: false,
-            error: "Horário já ocupado na agenda",
-            availableSlots,
-          };
-        }
-
         try {
           const created = await this.createAppointmentUseCase.executeInternal({
             actor: aiActor,
@@ -831,6 +823,8 @@ export class DrizzleAiBookingContextProvider
               resolvedCustomerName ??
               `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`,
             clientPhone,
+            isGuest,
+            payFullPrice,
             notes: notes?.trim() || "Agendado via WhatsApp IA",
             initialStatus: "CONFIRMED",
           });
@@ -841,11 +835,19 @@ export class DrizzleAiBookingContextProvider
             startsAt: created.startsAt,
             endsAt: created.endsAt,
             ...formatLocalSlot(created.startsAt),
+            servicePriceInCents: created.servicePriceInCentsSnapshot,
             status: created.status,
             serviceName: created.serviceNameSnapshot,
             collaboratorId: created.collaboratorId,
           };
         } catch (error) {
+          if (error instanceof AppointmentPolicyError) return {
+            success: false,
+            code: error.reasonCode,
+            error: error.message,
+            currentAppointment: error.currentAppointment,
+            availableSlots: [],
+          };
           // Proteção extra para concorrência (race condition entre a consulta prévia e o lock transacional).
           if (error instanceof AppointmentTimeConflictError) {
             const refreshedSlots = await loadAvailableSlots();
@@ -863,6 +865,7 @@ export class DrizzleAiBookingContextProvider
         appointmentId,
         startsAt,
         collaboratorId,
+        payFullPrice,
       }) => {
         await requireCustomerAppointment(appointmentId);
         const updated = await this.rescheduleAppointmentUseCase.execute({
@@ -871,10 +874,12 @@ export class DrizzleAiBookingContextProvider
           appointmentId,
           startsAt: parseStartsAtInCompanyTimezone(startsAt),
           collaboratorId,
+          payFullPrice,
         });
 
         return {
           id: updated.id,
+          servicePriceInCents: updated.servicePriceInCentsSnapshot,
           startsAt: updated.startsAt,
           endsAt: updated.endsAt,
           ...formatLocalSlot(updated.startsAt),

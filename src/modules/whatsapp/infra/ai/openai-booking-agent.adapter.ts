@@ -2,6 +2,7 @@ import type {
   AiBookingAgentInput,
   AiBookingAgentOutput,
   AiBookingAgentPort,
+  AiBookingTokenUsage,
   AiExecutedToolAction,
 } from "../../application/ports/ai-booking-agent.port.js";
 import {
@@ -39,8 +40,9 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
     input: AiBookingAgentInput,
   ): Promise<AiBookingAgentOutput> {
     const actions: AiExecutedToolAction[] = [];
+    const usage: AiBookingTokenUsage = { model: this.model, promptTokens: 0, completionTokens: 0 };
     try {
-      return await this.runTurn(input, actions);
+      return await this.runTurn(input, actions, usage);
     } catch (error) {
       const handoff = actions.find((action) => action.tool === "request_human_handoff" && action.ok);
       const converted = actions.some((action) =>
@@ -53,6 +55,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
         replyText: bookingContingencyReply(actions),
         provider: "OPENAI",
         actions,
+        usage,
         converted,
         ...(handoff ? { handoffRequested: handoff.data as { reason: string } } : {}),
       };
@@ -62,6 +65,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
   private async runTurn(
     input: AiBookingAgentInput,
     actions: AiExecutedToolAction[],
+    usage: AiBookingTokenUsage,
   ): Promise<AiBookingAgentOutput> {
     let converted = false;
     let handoffRequested: { reason: string } | undefined;
@@ -116,6 +120,8 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
       }
 
       const payload = (await response.json()) as {
+        model?: string;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
         choices?: Array<{
           message?: {
             content?: string | null;
@@ -124,6 +130,9 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
         }>;
       };
 
+      usage.model = payload.model ?? usage.model;
+      usage.promptTokens += payload.usage?.prompt_tokens ?? 0;
+      usage.completionTokens += payload.usage?.completion_tokens ?? 0;
       const assistantMessage = payload.choices?.[0]?.message;
       const toolCalls = assistantMessage?.tool_calls ?? [];
 
@@ -135,6 +144,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
           replyText,
           provider: "OPENAI",
           actions,
+          usage,
           converted,
           ...(handoffRequested ? { handoffRequested } : {}),
         };
@@ -180,6 +190,7 @@ export class OpenAiBookingAgentAdapter implements AiBookingAgentPort {
         "Consegui verificar suas informações! Pode confirmar como prefere prosseguir com o agendamento?",
       provider: "OPENAI",
       actions,
+      usage,
       converted,
       ...(handoffRequested ? { handoffRequested } : {}),
     };

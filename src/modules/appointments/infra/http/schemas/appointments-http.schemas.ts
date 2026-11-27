@@ -84,6 +84,8 @@ export const createOwnerAppointmentBodySchema = z.object({
   clientName: z.string().trim().min(2, "Client name is too short.").max(120),
   clientPhone: z.string().trim().min(10, "Invalid phone number.").max(30),
   notes: z.string().trim().max(1000).optional(),
+  isGuest: z.boolean().optional(),
+  payFullPrice: z.boolean().optional(),
   initialStatus: z.enum(["PENDING", "CONFIRMED"]).optional(),
 });
 
@@ -107,6 +109,7 @@ export const updateAppointmentStatusBodySchema = z.object({
 
 export const rescheduleAppointmentBodySchema = z.object({
   startsAt: isoDateTimeSchema,
+  payFullPrice: z.boolean().optional(),
   collaboratorId: z.string().uuid("Invalid collaboratorId.").optional(),
 });
 
@@ -122,6 +125,7 @@ export const errorOpenApiSchema = {
   required: ["message"],
   properties: {
     message: { type: "string" },
+    code: { type: "string" },
   },
 } as const;
 
@@ -228,7 +232,13 @@ export const appointmentOpenApiSchema = {
 
 export const staffAppointmentOpenApiSchema = {
   ...appointmentOpenApiSchema,
-  properties: { ...appointmentOpenApiSchema.properties, notes: { type: "string", nullable: true } },
+  properties: {
+    ...appointmentOpenApiSchema.properties,
+    notes: { type: "string", nullable: true },
+    awaitingClosure: { type: "boolean" },
+    isGuest: { type: "boolean" },
+    usesClubBenefit: { type: "boolean" },
+  },
 } as const;
 
 export const appointmentAuditLogOpenApiSchema = {

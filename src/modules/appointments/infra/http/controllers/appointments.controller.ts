@@ -100,6 +100,8 @@ export class AppointmentsController {
       clientPhone: body.clientPhone,
       initialStatus: body.initialStatus,
       notes: body.notes,
+      isGuest: body.isGuest,
+      payFullPrice: body.payFullPrice,
     });
 
     return reply.status(201).send(appointment);
@@ -173,6 +175,7 @@ export class AppointmentsController {
       appointmentId,
       startsAt: body.startsAt,
       collaboratorId: body.collaboratorId,
+      payFullPrice: body.payFullPrice,
     });
 
     return reply.status(200).send(updated);

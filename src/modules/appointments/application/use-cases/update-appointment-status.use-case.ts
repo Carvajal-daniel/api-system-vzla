@@ -3,6 +3,7 @@ import {
   AppointmentNotFoundError,
   UnauthorizedSchedulingActionError,
 } from "../../domain/errors/appointment-errors.js";
+import { AppointmentPolicyService } from "../../domain/services/appointment-policy.service.js";
 import type { AppointmentsRepository } from "../../domain/repositories/appointments.repository.js";
 import {
   type AppointmentOutputDTO,
@@ -39,12 +40,15 @@ export class UpdateAppointmentStatusUseCase {
     }
 
     const { startsAt, status, collaboratorId } = appointment;
-    if (input.status === "COMPLETED" && appointment.endsAt > (input.now ?? new Date())) {
+    const now = input.now ?? new Date();
+    const ai = actorSource === "WHATSAPP_AI";
+    if (ai) AppointmentPolicyService.assertAiCanChange(startsAt, now);
+    if (input.status === "COMPLETED" && appointment.endsAt > now) {
       throw new AppointmentCompletionTooEarlyError();
     }
 
     appointment.transitionStatus(input.status, input.cancellationReason ?? null);
-    await this.appointmentsRepository.save(appointment, { startsAt, status, collaboratorId });
+    await this.appointmentsRepository.save(appointment, { startsAt, status, collaboratorId }, ai ? now : undefined);
 
     return toAppointmentOutputDTO(appointment);
   }

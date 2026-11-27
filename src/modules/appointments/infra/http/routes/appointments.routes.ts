@@ -282,6 +282,8 @@ export async function appointmentsRoutes(
             clientPhone: { type: "string", minLength: 10, maxLength: 30 },
             initialStatus: { type: "string", enum: ["PENDING", "CONFIRMED"] },
             notes: { type: "string", maxLength: 1000 },
+            isGuest: { type: "boolean" },
+            payFullPrice: { type: "boolean" },
           },
         },
         response: {
@@ -413,6 +415,7 @@ export async function appointmentsRoutes(
           required: ["startsAt"],
           properties: {
             startsAt: { type: "string", format: "date-time" },
+            payFullPrice: { type: "boolean" },
             collaboratorId: { type: "string", format: "uuid" },
           },
         },

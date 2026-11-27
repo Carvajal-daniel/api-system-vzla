@@ -11,6 +11,7 @@ import type {
   TenantUsageRepository,
 } from "../../../domain/repositories/tenant-usage.repository.js";
 import { AiUsageLogsTable } from "../schema/ai-usage-logs-schema.js";
+import { recordSaasTelemetry } from "./drizzle-saas-telemetry.repository.js";
 import { TenantUsageMetricsTable } from "../schema/tenant-usage-metrics-schema.js";
 
 function mapMetricsRow(
@@ -25,6 +26,16 @@ function mapMetricsRow(
     totalOutputTokens: row.totalOutputTokens,
     updatedAt: row.updatedAt,
   };
+}
+
+function getTelemetryTurn(params: IncrementUsageAndLogParams) {
+  if (params.feature === "BOOKING") {
+    return ["SIMULATED", "UNAVAILABLE"].includes(params.model) ? { aiTurnsL0: 1 } : { aiTurnsL1: 1 };
+  }
+  if (params.feature === "RETENTION" && params.promptTokens === 0 && params.completionTokens === 0) {
+    return {};
+  }
+  return { aiTurnsL2: 1 };
 }
 
 // Implementação Drizzle da governança de consumo com isolamento estrito por tenantId
@@ -98,6 +109,13 @@ export class DrizzleTenantUsageRepository implements TenantUsageRepository {
         completionTokens: params.completionTokens,
         metadata: params.metadata,
         createdAt: params.now,
+      });
+
+      const turn = getTelemetryTurn(params);
+      await recordSaasTelemetry(tx, params.tenantId, params.now, {
+        ...turn,
+        tokensInput: params.promptTokens,
+        tokensOutput: params.completionTokens,
       });
 
       return mapMetricsRow(metricsRow!);

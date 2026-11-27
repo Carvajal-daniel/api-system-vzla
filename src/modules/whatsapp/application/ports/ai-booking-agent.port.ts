@@ -1,3 +1,5 @@
+import type { AppointmentPolicyConflict } from "../../../appointments/domain/services/appointment-policy.service.js";
+
 export interface AiBookingServiceSummary {
   id: string;
   name: string;
@@ -18,6 +20,7 @@ export interface AiBookingSubscriptionPlanItem {
   description?: string | null | undefined;
   priceInCents?: number | null | undefined;
   durationMinutes?: number | null | undefined;
+  allowedDaysOfWeek?: number[] | null | undefined;
 }
 
 export interface AiBookingSubscriptionPlansResult {
@@ -126,6 +129,8 @@ export type AiBookingCreateAppointmentResult =
       success: false;
       error: string;
       availableSlots: AiBookingAvailabilitySlot[];
+      code?: string | undefined;
+      currentAppointment?: AppointmentPolicyConflict | undefined;
     };
 
 export interface AiBookingToolExecutor {
@@ -161,12 +166,15 @@ export interface AiBookingToolExecutor {
     localTime?: string | undefined; // HH:MM no fuso da empresa
     clientName?: string | undefined;
     notes?: string | undefined;
+    isGuest?: boolean | undefined;
+    payFullPrice?: boolean | undefined;
   }): Promise<AiBookingCreateAppointmentResult>;
 
   rescheduleAppointment(input: {
     appointmentId: string;
     startsAt: string; // ISO-8601
     collaboratorId?: string | undefined;
+    payFullPrice?: boolean | undefined;
   }): Promise<{
     id: string;
     startsAt: string;

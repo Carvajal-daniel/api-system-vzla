@@ -39,6 +39,7 @@ export class CreateAppointmentUseCase {
       clientPhone: input.clientPhone,
       initialStatus: "PENDING",
       publicBooking: true,
+      payFullPrice: true,
       publicDetails: input.publicDetails,
       now: input.now ?? new Date(),
     });
@@ -63,6 +64,9 @@ export class CreateAppointmentUseCase {
       clientName: input.clientName,
       clientPhone: input.clientPhone,
       notes: input.notes,
+      isGuest: input.isGuest,
+      payFullPrice: input.payFullPrice,
+      ai: input.actorSource === "WHATSAPP_AI",
       initialStatus: input.initialStatus ?? "PENDING",
       now: input.now ?? new Date(),
     });
@@ -78,6 +82,9 @@ export class CreateAppointmentUseCase {
     initialStatus: InitialAppointmentStatusValue;
     notes?: string | undefined;
     publicBooking?: boolean;
+    ai?: boolean;
+    isGuest?: boolean | undefined;
+    payFullPrice?: boolean | undefined;
     publicDetails?: PublicBookingDetails | undefined;
     now: Date;
   }): Promise<AppointmentOutputDTO> {
@@ -168,8 +175,14 @@ export class CreateAppointmentUseCase {
     });
 
     // Persistência atômica sob lock exclusivo por (companyId, collaboratorId) contra double-booking.
-    await this.appointmentsRepository.createWithLock(appointment, details);
+    const saved = await this.appointmentsRepository.createWithLock(appointment, details, {
+      now: params.now,
+      ai: params.ai ?? false,
+      dayOfWeek: localStart.dayOfWeek,
+      isGuest: params.isGuest,
+      payFullPrice: params.payFullPrice,
+    });
 
-    return toAppointmentOutputDTO(appointment);
+    return toAppointmentOutputDTO(saved ?? appointment);
   }
 }

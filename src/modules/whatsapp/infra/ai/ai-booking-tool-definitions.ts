@@ -1,3 +1,4 @@
+import { AppointmentPolicyError } from "../../../appointments/domain/services/appointment-policy.service.js";
 import type {
   AiBookingAgentInput,
   AiBookingServiceCategoryGroup,
@@ -240,6 +241,14 @@ export const AI_BOOKING_TOOL_DEFINITIONS: AiToolDefinition[] = [
           type: "string",
           description: "Nome do cliente (opcional, usa o contato da conversa se omitido).",
         },
+        isGuest: {
+          type: "boolean",
+          description: "Verdadeiro apenas para reserva de acompanhante ou terceiro a preço avulso.",
+        },
+        payFullPrice: {
+          type: "boolean",
+          description: "Verdadeiro apenas após o aceite do cliente para pagar o preço cheio.",
+        },
         notes: {
           type: "string",
           description: "Observação opcional do agendamento.",
@@ -266,6 +275,10 @@ export const AI_BOOKING_TOOL_DEFINITIONS: AiToolDefinition[] = [
         collaboratorId: {
           type: "string",
           description: "UUID opcional do novo profissional.",
+        },
+        payFullPrice: {
+          type: "boolean",
+          description: "Verdadeiro apenas após o aceite para remarcar pelo preço cheio.",
         },
       },
       required: ["appointmentId", "startsAt"],
@@ -530,6 +543,8 @@ export function buildAiBookingSystemPrompt(input: AiBookingAgentInput): string {
     "   - Se não houver nenhum agendamento futuro: informe educadamente que não encontrou agendamentos ativos para este número de WhatsApp.",
     "10. ESCOPO ESTRITO: Se o cliente falar sobre assuntos fora do escopo da barbearia/salão (política, piadas, programação, receitas, finanças, etc.), recuse educadamente em 1 frase curta e direcione de volta para agendamentos ou informações da loja.",
     "11. TRANSBORDO HUMANO: Sempre que o cliente pedir para falar com um humano, atendente, barbeiro, gerente ou pessoa real — ou enviar uma reclamação/assunto que exija intervenção humana — chame obrigatoriamente a ferramenta request_human_handoff e confirme claramente a transferência para a equipe.",
+    "Ao receber SUBSCRIBER_ACTIVE_APPOINTMENT_EXISTS, ofereça apenas reagendar_agendamento com currentAppointment após confirmação do novo horário. Nunca combine cancelamento e nova criação.",
+    "Ao receber PLAN_DAY_RESTRICTED, ofereça preço avulso de catálogo ou consulte um upgrade com a equipe. Use payFullPrice só após aceite. Marque isGuest para terceiro. A IA nunca negocia dívida. APPOINTMENT_ALREADY_STARTED deve ser tratado pela equipe.",
     "12. NÃO INVENTE REGRAS OU PLANOS: É PROIBIDO inventar regras de tolerância de atraso, multas, políticas de cancelamento ou planos de assinatura que não constem explicitamente nas regras operacionais, ferramentas ou instruções personalizadas da empresa. Se não houver informação cadastrada, diga que pode verificar com a equipe ou acione um atendente se necessário.",
     "",
     `Principais serviços (Top ${topThreeServices.length} de ${totalServicesCount} ativos — use listar_servicos_e_profissionais para o catálogo completo):`,
@@ -687,6 +702,8 @@ export async function dispatchAiBookingToolCall(
           localTime: rawArgs.localTime ? String(rawArgs.localTime) : undefined,
           clientName: rawArgs.clientName ? String(rawArgs.clientName) : undefined,
           notes: rawArgs.notes ? String(rawArgs.notes) : undefined,
+          isGuest: rawArgs.isGuest === true,
+          payFullPrice: rawArgs.payFullPrice === true,
         });
         if (data.success === false) {
           actions.push({
@@ -719,6 +736,7 @@ export async function dispatchAiBookingToolCall(
           collaboratorId: rawArgs.collaboratorId
             ? String(rawArgs.collaboratorId)
             : undefined,
+          payFullPrice: rawArgs.payFullPrice === true,
         });
         actions.push({
           tool: "reagendar_agendamento",
@@ -793,6 +811,9 @@ export async function dispatchAiBookingToolCall(
         summary: message,
       });
     }
-    return { result: { success: false, error: message }, converted: false };
+    const policy = error instanceof AppointmentPolicyError
+      ? { code: error.reasonCode, currentAppointment: error.currentAppointment }
+      : {};
+    return { result: { success: false, error: message, ...policy }, converted: false };
   }
 }

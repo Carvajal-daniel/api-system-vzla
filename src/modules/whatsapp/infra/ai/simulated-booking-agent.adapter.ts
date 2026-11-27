@@ -310,6 +310,22 @@ export class SimulatedBookingAgentAdapter implements AiBookingAgentPort {
               summary: created.error,
               data: created,
             });
+            if (created.code === "SUBSCRIBER_ACTIVE_APPOINTMENT_EXISTS" && created.currentAppointment) {
+              const current = created.currentAppointment;
+              const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: company.timezone });
+              return {
+                replyText: `Você já tem ${current.serviceName} marcado para ${date.format(new Date(current.startsAt))}. Quer remarcar esse agendamento?`,
+                provider: "SIMULATED",
+                actions,
+              };
+            }
+            if (created.code === "PLAN_DAY_RESTRICTED") {
+              return {
+                replyText: "Seu plano não cobre esse dia. Posso informar o valor avulso ou encaminhar você à equipe para consultar um upgrade.",
+                provider: "SIMULATED",
+                actions,
+              };
+            }
             const alternatives = created.availableSlots
               .slice(0, 4)
               .map((s) => s.localTime ?? formatTimeInTimezone(s.startsAt, company.timezone))

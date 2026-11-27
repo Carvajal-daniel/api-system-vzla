@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -33,6 +34,9 @@ export const AppointmentTable = pgTable(
       .notNull()
       .references(() => ServiceTable.id, { onDelete: "restrict" }),
     clientName: text("client_name").notNull(),
+    isGuest: boolean("is_guest").default(false).notNull(),
+    clubFullPriceInCents: integer("club_full_price_in_cents"),
+    usesClubBenefit: boolean("uses_club_benefit").default(false).notNull(),
     clientPhone: text("client_phone").notNull(),
     clientData: jsonb("client_data").$type<BookingClientData>(),
     cancellationDigest: text("cancellation_digest"),
@@ -89,6 +93,8 @@ export const AppointmentTable = pgTable(
       "appointments_status_chk",
       sql`${table.status} IN ('PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELED', 'NO_SHOW')`,
     ),
+    index("appointments_company_client_future_idx").on(table.companyId, table.clientPhone, table.startsAt)
+      .where(sql`${table.status} IN ('PENDING', 'CONFIRMED') AND NOT ${table.isGuest}`),
     index("appointments_company_collab_range_idx").on(
       table.companyId,
       table.collaboratorId,

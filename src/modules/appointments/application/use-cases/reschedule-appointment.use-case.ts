@@ -10,6 +10,7 @@ import type { ScheduleBlocksRepository } from "../../domain/repositories/schedul
 import type { SchedulingContextLookupRepository } from "../../domain/repositories/scheduling-context-lookup.repository.js";
 import { AvailabilityCalculator, companySlotStep, getCompanyHours } from "../../domain/services/availability-calculator.js";
 import { getLocalDateTimeParts } from "../../domain/services/timezone-utils.js";
+import { AppointmentPolicyService } from "../../domain/services/appointment-policy.service.js";
 import { AppointmentStatus } from "../../domain/value-objects/appointment-status.vo.js";
 import {
   type AppointmentOutputDTO,
@@ -42,6 +43,10 @@ export class RescheduleAppointmentUseCase {
     if (!appointment) {
       throw new AppointmentNotFoundError();
     }
+
+    const now = input.now ?? new Date();
+    const ai = actorSource === "WHATSAPP_AI";
+    if (ai) AppointmentPolicyService.assertAiCanChange(appointment.startsAt, now);
 
     if (!AppointmentStatus.create(appointment.status).isReschedulable()) {
       throw new AppointmentNotReschedulableError(appointment.status);
@@ -90,19 +95,26 @@ export class RescheduleAppointmentUseCase {
       startsAt: input.startsAt,
       serviceDurationMinutes: durationMinutes,
       timezone: company.timezone,
-      now: input.now ?? new Date(),
+      now,
       workSchedule,
       companyOperatingHours: getCompanyHours(company, localStart.dayOfWeek),
       blocks: blocks.map((b) => b.toTimeRange()),
     });
 
+    const { status, startsAt, collaboratorId } = appointment;
     appointment.reschedule(
       input.startsAt,
       targetCollaboratorId,
       targetCollaboratorId === appointment.collaboratorId ? undefined : enabledCollaborator.commissionPercentage,
     );
-    await this.appointmentsRepository.rescheduleWithLock(appointment);
+    const saved = await this.appointmentsRepository.rescheduleWithLock(appointment, {
+      now,
+      ai,
+      dayOfWeek: localStart.dayOfWeek,
+      expected: { status, startsAt, collaboratorId },
+      payFullPrice: input.payFullPrice,
+    });
 
-    return toAppointmentOutputDTO(appointment);
+    return toAppointmentOutputDTO(saved ?? appointment);
   }
 }

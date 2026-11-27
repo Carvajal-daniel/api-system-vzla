@@ -45,6 +45,10 @@ export const CompanyTable = pgTable("companies", {
     .$type<CompanyRankingWeights>()
     .default(DEFAULT_COMPANY_RANKING_WEIGHTS)
     .notNull(),
+  saasPlan: text("saas_plan", { enum: ["ESSENTIAL", "PRO", "SCALE"] }).default("PRO").notNull(),
+  hasOfficialApiAddon: boolean("has_official_api_addon").default(false).notNull(),
+  saasStatus: text("saas_status", { enum: ["TRIAL", "ACTIVE", "PAST_DUE", "CANCELED"] }).default("TRIAL").notNull(),
+  monthlyAiQuota: integer("monthly_ai_quota").default(400).notNull(),
   monthlyGoalInCents: integer("monthly_goal_in_cents").default(0).notNull(),
   currency: varchar("currency", { length: 3 }).$type<Currency>().default("BRL").notNull(),
   financeOpenedOn: date("finance_opened_on").default(sql`CURRENT_DATE`).notNull(),
@@ -55,6 +59,9 @@ export const CompanyTable = pgTable("companies", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
   return {
+    saasPlanCheck: check("companies_saas_plan_check", sql`${table.saasPlan} in ('ESSENTIAL', 'PRO', 'SCALE')`),
+    saasStatusCheck: check("companies_saas_status_check", sql`${table.saasStatus} in ('TRIAL', 'ACTIVE', 'PAST_DUE', 'CANCELED')`),
+    monthlyAiQuotaCheck: check("companies_monthly_ai_quota_check", sql`${table.monthlyAiQuota} >= 0`),
     currencyCheck: check("companies_currency_check", sql`${table.currency} in ('BRL', 'USD', 'VES')`),
     // Ãndice essencial para validar duplicidade de e-mail no login ou novo cadastro
     emailUniqueIdx: index("companies_email_idx").on(table.email),

@@ -176,6 +176,13 @@
       "when": 1796071200000,
       "tag": "0024_appointment_reminders_and_nps",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1796071300000,
+      "tag": "0025_phase_1_policy_and_telemetry",
+      "breakpoints": true
     }
   ]
 }

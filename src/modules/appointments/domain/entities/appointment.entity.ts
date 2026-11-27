@@ -24,6 +24,8 @@ export interface AppointmentProps {
   status: AppointmentStatusValue;
   cancellationReason: string | null;
   notes?: string | null;
+  isGuest?: boolean;
+  usesClubBenefit?: boolean;
   serviceNameSnapshot: string;
   servicePriceInCentsSnapshot: number;
   serviceDurationMinutesSnapshot: number;
@@ -206,6 +208,14 @@ export class Appointment {
 
   get clientPhone(): string {
     return this.props.clientPhone;
+  }
+
+  get isGuest(): boolean {
+    return this.props.isGuest ?? false;
+  }
+
+  get usesClubBenefit(): boolean {
+    return this.props.usesClubBenefit ?? false;
   }
 
   get notes(): string | null {

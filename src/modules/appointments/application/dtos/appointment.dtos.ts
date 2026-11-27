@@ -27,6 +27,8 @@ export interface AppointmentOutputDTO {
   status: AppointmentStatusValue;
   cancellationReason: string | null;
   notes: string | null;
+  isGuest: boolean;
+  usesClubBenefit: boolean;
   serviceNameSnapshot: string;
   servicePriceInCentsSnapshot: number;
   serviceDurationMinutesSnapshot: number;
@@ -55,6 +57,8 @@ export interface CreateInternalAppointmentInputDTO {
   clientName: string;
   clientPhone: string;
   notes?: string | undefined;
+  isGuest?: boolean | undefined;
+  payFullPrice?: boolean | undefined;
   initialStatus?: InitialAppointmentStatusValue | undefined;
   now?: Date | undefined;
   actorSource?: SchedulingActorSource | undefined;
@@ -83,6 +87,7 @@ export interface RescheduleAppointmentInputDTO {
   appointmentId: string;
   startsAt: Date;
   collaboratorId?: string | undefined;
+  payFullPrice?: boolean | undefined;
   now?: Date | undefined;
   actorSource?: SchedulingActorSource | undefined;
 }
@@ -134,6 +139,8 @@ export function toAppointmentOutputDTO(
     status: appointment.status,
     cancellationReason: appointment.cancellationReason,
     notes: appointment.notes,
+    isGuest: appointment.isGuest,
+    usesClubBenefit: appointment.usesClubBenefit,
     serviceNameSnapshot: appointment.serviceNameSnapshot,
     servicePriceInCentsSnapshot: appointment.servicePriceInCentsSnapshot,
     serviceDurationMinutesSnapshot: appointment.serviceDurationMinutesSnapshot,

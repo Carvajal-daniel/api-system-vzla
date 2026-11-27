@@ -47,22 +47,32 @@ export interface CreateAppointmentAuditLogInput {
   authorizedByRole: string;
 }
 
+export interface BookingPolicyOptions {
+  now: Date;
+  ai: boolean;
+  isGuest?: boolean | undefined;
+  payFullPrice?: boolean | undefined;
+  dayOfWeek: number;
+  expected?: Pick<Appointment, "status" | "startsAt" | "collaboratorId">;
+}
+
 export interface AppointmentsRepository {
   /**
    * Cria o agendamento de forma atômica sob lock exclusivo por (companyId, collaboratorId),
    * rejeitando com AppointmentTimeConflictError caso exista qualquer agendamento ativo sobreposto.
    */
-  createWithLock(appointment: Appointment, details?: PublicBookingDetails): Promise<void>;
+  createWithLock(appointment: Appointment, details?: PublicBookingDetails, policy?: BookingPolicyOptions): Promise<void | Appointment>;
 
   /**
    * Reprograma o agendamento de forma atômica sob lock exclusivo por (companyId, collaboratorId),
    * ignorando o próprio `appointment.id` na verificação de sobreposição.
    */
-  rescheduleWithLock(appointment: Appointment): Promise<void>;
+  rescheduleWithLock(appointment: Appointment, policy?: BookingPolicyOptions): Promise<void | Appointment>;
 
   save(
     appointment: Appointment,
     expected: Pick<Appointment, "status" | "startsAt" | "collaboratorId">,
+    aiNow?: Date,
   ): Promise<void>;
 
   /**

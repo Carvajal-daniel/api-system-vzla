@@ -46,7 +46,7 @@ export class ListAppointmentsUseCase {
 
   async execute(
     input: ListAppointmentsInputDTO,
-  ): Promise<AppointmentOutputDTO[]> {
+  ): Promise<Array<AppointmentOutputDTO & { awaitingClosure: boolean }>> {
     const { actor } = input;
     let collaboratorId = input.collaboratorId;
 
@@ -68,6 +68,10 @@ export class ListAppointmentsUseCase {
       status: input.status,
     });
 
-    return appointments.map(toAppointmentOutputDTO);
+    const now = new Date();
+    return appointments.map((appointment) => ({
+      ...toAppointmentOutputDTO(appointment),
+      awaitingClosure: appointment.status === "CONFIRMED" && appointment.endsAt <= now,
+    }));
   }
 }
