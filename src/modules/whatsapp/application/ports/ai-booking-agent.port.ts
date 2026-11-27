@@ -21,6 +21,9 @@ export interface AiBookingSubscriptionPlanItem {
   priceInCents?: number | null | undefined;
   durationMinutes?: number | null | undefined;
   allowedDaysOfWeek?: number[] | null | undefined;
+  billingCycle?: "MONTHLY" | undefined;
+  includedServiceIds?: string[] | undefined;
+  maxMonthlyUses?: number | null | undefined;
 }
 
 export interface AiBookingSubscriptionPlansResult {

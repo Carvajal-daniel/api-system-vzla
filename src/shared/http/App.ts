@@ -17,6 +17,7 @@ import { companySettingsRoutes } from "../../modules/Company/infra/http/company-
 import { ComapnyRoutes } from "../../modules/Company/infra/http/routers/company-routes.js";
 import { collectionRoutes } from "../../modules/finance/infra/http/routes/collection.routes.js";
 import { financeRoutes } from "../../modules/finance/infra/http/routes/finance.routes.js";
+import { paymentRoutes } from "../../modules/payments/infra/http/payment.routes.js";
 import { orderRoutes } from "../../modules/finance/infra/http/routes/order.routes.js";
 import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.routes.js";
 import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
@@ -105,6 +106,7 @@ app.register(appointmentsRoutes);
 app.register(financeRoutes);
 app.register(collectionRoutes);
 app.register(orderRoutes);
+app.register(paymentRoutes);
 app.register(outflowRoutes);
 app.register(inventoryRoutes);
 app.register(clientRecoveryRoutes);

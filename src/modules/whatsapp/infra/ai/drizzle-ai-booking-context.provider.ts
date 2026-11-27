@@ -261,9 +261,14 @@ export class DrizzleAiBookingContextProvider
         db.select({
           id: SubscriptionPlanTable.id,
           name: SubscriptionPlanTable.name,
+          description: SubscriptionPlanTable.description,
+          priceInCents: sql<number | null>`nullif(${SubscriptionPlanTable.priceCents}, 0)`,
+          billingCycle: SubscriptionPlanTable.billingCycle,
+          includedServiceIds: SubscriptionPlanTable.includedServiceIds,
           allowedDaysOfWeek: SubscriptionPlanTable.allowedDaysOfWeek,
+          maxMonthlyUses: SubscriptionPlanTable.maxMonthlyUses,
         }).from(SubscriptionPlanTable)
-          .where(eq(SubscriptionPlanTable.companyId, companyId))
+          .where(and(eq(SubscriptionPlanTable.companyId, companyId), eq(SubscriptionPlanTable.active, true)))
           .orderBy(asc(SubscriptionPlanTable.name)),
       ]);
 

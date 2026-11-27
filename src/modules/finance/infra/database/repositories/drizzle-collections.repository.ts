@@ -7,6 +7,7 @@ import {
   collectionErrors, type AppointmentCollections, type CollectionsRepository,
 } from "../../../application/collections.use-cases.js";
 import { appointmentBalance, CollectionsError, type Receipt, type Receivable } from "../../../domain/collections.js";
+import { hasOnlineOrderForAppointment } from "./online-order.js";
 import { listCommissionDeductions } from "./commission-deductions.js";
 import { FinancialDocumentTable, ReceiptTable } from "../schema/collections-schema.js";
 
@@ -156,6 +157,11 @@ export class DrizzleCollectionsRepository implements CollectionsRepository {
           return rows.map(({ row, appointmentId }) => ({ ...asReceipt(row), appointmentId }));
         },
         async addReceipts(items) {
+          if (items.some((item) => !item.reversesReceiptId)) {
+            const [online] = await tx.select({ exists: hasOnlineOrderForAppointment(companyId, appointmentId, true) })
+              .from(AppointmentTable).where(eq(AppointmentTable.id, appointmentId));
+            if (online?.exists) throw new CollectionsError("CONFLICT", "FINANCE_APPOINTMENT_ONLINE_ORDER");
+          }
           const documentId = await ensureDocument();
           const rows = await tx.insert(ReceiptTable).values(
             items.map((item) => ({ ...item, companyId, documentId })),
