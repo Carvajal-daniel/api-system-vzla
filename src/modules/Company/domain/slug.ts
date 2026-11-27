@@ -23,15 +23,20 @@ export function isValidCompanySlug(slug: string): boolean {
   );
 }
 
-// Normaliza o nome da empresa para um slug limpo, URL-safe e determinístico.
-export function slugifyCompanyName(companyName: string, fallbackId?: string): string {
-  const base = companyName
+// Normaliza um slug customizado informado pelo dono sem mascarar palavras reservadas.
+export function normalizeCustomCompanySlug(rawSlug: string): string {
+  return rawSlug
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+    .slice(0, 100);
+}
+
+// Normaliza o nome da empresa para um slug limpo, URL-safe e determinístico.
+export function slugifyCompanyName(companyName: string, fallbackId?: string): string {
+  const base = normalizeCustomCompanySlug(companyName).slice(0, 80);
 
   const safeBase = base.length >= 2 ? base : `barbearia-${(fallbackId ?? "000000").slice(0, 6)}`;
   if (RESERVED_COMPANY_SLUGS.has(safeBase)) {

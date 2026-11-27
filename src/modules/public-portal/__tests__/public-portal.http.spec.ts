@@ -39,6 +39,11 @@ import type {
   PublicPortalPaymentsPort,
   PublicPortalReadPort,
 } from "../application/ports/public-portal.port.js";
+import {
+  isValidCompanySlug,
+  normalizeCustomCompanySlug,
+  slugifyCompanyName,
+} from "../../Company/domain/slug.js";
 import { publicPortalRoutes } from "../infra/http/routes/public-portal.routes.js";
 
 class ClubAwareInMemoryAppointmentsRepository implements AppointmentsRepository {
@@ -788,7 +793,7 @@ describe("Public Booking Portal (/public/:slug/*)", () => {
     });
   });
 
-  it("exposes all 7 /public/{slug}/* routes in OpenAPI/Swagger schema", () => {
+  it("exposes all /public/{slug}/* routes and legacy /public/companies/{companyId}/slug in OpenAPI/Swagger schema", () => {
     const spec = productionApp.swagger();
     const paths = Object.keys(spec.paths ?? {});
 
@@ -799,5 +804,14 @@ describe("Public Booking Portal (/public/:slug/*)", () => {
     expect(paths).toContain("/public/{slug}/club/subscribe");
     expect(paths).toContain("/public/{slug}/waitlist");
     expect(paths).toContain("/public/{slug}/payments/{paymentId}/status");
+    expect(paths).toContain("/public/companies/{companyId}/slug");
+  });
+
+  it("normalizes custom slugs and rejects reserved words", () => {
+    expect(normalizeCustomCompanySlug("  Barbearia São José!! ")).toBe("barbearia-sao-jose");
+    expect(isValidCompanySlug("barbearia-sao-jose")).toBe(true);
+    expect(isValidCompanySlug("companies")).toBe(false);
+    expect(isValidCompanySlug("admin")).toBe(false);
+    expect(slugifyCompanyName("Admin")).toBe("admin-shop");
   });
 });

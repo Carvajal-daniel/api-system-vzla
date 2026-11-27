@@ -1,7 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, avg, between, count, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, avg, between, count, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { analyzeSatisfaction } from "../../domain/satisfaction-analysis.js";
+import {
+  isValidCompanySlug,
+  normalizeCustomCompanySlug,
+  RESERVED_COMPANY_SLUGS,
+} from "../../domain/slug.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { db } from "../../../../shared/database/database.js";
@@ -33,12 +38,14 @@ async function snapshot(companyId: string) {
     db.select({ count: count(CollaboratorReviewTable.rating), average: avg(CollaboratorReviewTable.rating) })
       .from(CollaboratorReviewTable).where(and(eq(CollaboratorReviewTable.companyId, companyId), between(CollaboratorReviewTable.rating, 1, 5))),
     db.select({
+      slug: CompanyTable.slug,
       googleReviewUrl: CompanyTable.googleReviewUrl,
       enablePostVisitSurvey: CompanyTable.enablePostVisitSurvey,
     }).from(CompanyTable).where(eq(CompanyTable.id, companyId)).limit(1),
   ]);
   return {
     ...settings,
+    slug: companyRow?.slug ?? null,
     countryCodeConfigured,
     googleReviewUrl: companyRow?.googleReviewUrl ?? null,
     enablePostVisitSurvey: companyRow?.enablePostVisitSurvey ?? true,
@@ -61,6 +68,49 @@ async function surveyReviews(companyId: string, limit: number, stars?: number) {
 }
 
 export async function companySettingsRoutes(app: FastifyInstance) {
+  // Rota pública leve para redirecionar URLs legadas /book/[companyId] para /[slug]
+  app.get(
+    "/public/companies/:companyId/slug",
+    {
+      schema: {
+        tags: ["Public Portal"],
+        summary: "Resolve the public booking portal slug from a legacy companyId",
+        params: {
+          type: "object",
+          required: ["companyId"],
+          properties: { companyId: { type: "string", format: "uuid" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["slug"],
+            properties: { slug: { type: "string" } },
+          },
+          400: {
+            type: "object",
+            required: ["message"],
+            properties: { message: { type: "string" } },
+          },
+          404: {
+            type: "object",
+            required: ["message"],
+            properties: { message: { type: "string" } },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { companyId } = z.object({ companyId: z.uuid() }).parse(request.params);
+      const [company] = await db
+        .select({ slug: CompanyTable.slug })
+        .from(CompanyTable)
+        .where(and(eq(CompanyTable.id, companyId), eq(CompanyTable.isActive, true)))
+        .limit(1);
+      if (!company) return reply.code(404).send({ message: "Empresa não encontrada." });
+      return { slug: company.slug };
+    },
+  );
+
   app.get("/public/companies/:companyId/settings", async (request, reply) => {
     const { companyId } = z.object({ companyId: z.uuid() }).parse(request.params);
     const [company] = await db.select({ id: CompanyTable.id }).from(CompanyTable)
@@ -81,16 +131,44 @@ export async function companySettingsRoutes(app: FastifyInstance) {
     const { companyId: target } = z.object({ companyId: z.uuid().optional() }).parse(request.params ?? {});
     if (target && target !== companyId) return reply.code(403).send({ message: "Acesso restrito à própria empresa." });
     const body = settingsPatchSchema.extend({
+      slug: z.string().trim().min(2).max(120).optional(),
       appearance: appearanceSchema.partial().optional(), palette: appearanceSchema.shape.palette.optional(),
       mode: appearanceSchema.shape.mode.optional(), theme: appearanceSchema.shape.mode.optional(),
       region: z.object({ timezone: timezoneSchema, currency: z.enum(["BRL", "USD", "VES"]) }).optional(),
       googleReviewUrl: z.string().trim().url().max(500).nullable().optional(),
       enablePostVisitSurvey: z.boolean().optional(),
     }).parse(request.body);
-    const { appearance: nested, palette, mode, theme, region, googleReviewUrl, enablePostVisitSurvey, ...preferences } = body;
-    const companySurveyUpdates: Partial<typeof CompanyTable.$inferInsert> = {};
-    if (googleReviewUrl !== undefined) companySurveyUpdates.googleReviewUrl = googleReviewUrl;
-    if (enablePostVisitSurvey !== undefined) companySurveyUpdates.enablePostVisitSurvey = enablePostVisitSurvey;
+    const { slug: rawSlug, appearance: nested, palette, mode, theme, region, googleReviewUrl, enablePostVisitSurvey, ...preferences } = body;
+    const companyColumnUpdates: Partial<typeof CompanyTable.$inferInsert> = {};
+    if (googleReviewUrl !== undefined) companyColumnUpdates.googleReviewUrl = googleReviewUrl;
+    if (enablePostVisitSurvey !== undefined) companyColumnUpdates.enablePostVisitSurvey = enablePostVisitSurvey;
+    if (rawSlug !== undefined) {
+      const normalizedSlug = normalizeCustomCompanySlug(rawSlug);
+      if (RESERVED_COMPANY_SLUGS.has(normalizedSlug)) {
+        return reply.code(400).send({
+          code: "COMPANY_SLUG_RESERVED",
+          message: "Este link personalizado é reservado pelo sistema. Escolha outro nome.",
+        });
+      }
+      if (!isValidCompanySlug(normalizedSlug)) {
+        return reply.code(400).send({
+          code: "COMPANY_SLUG_INVALID",
+          message: "Informe um link válido com pelo menos 2 caracteres (letras, números e hífen).",
+        });
+      }
+      const [conflict] = await db
+        .select({ id: CompanyTable.id })
+        .from(CompanyTable)
+        .where(and(eq(CompanyTable.slug, normalizedSlug), ne(CompanyTable.id, companyId)))
+        .limit(1);
+      if (conflict) {
+        return reply.code(409).send({
+          code: "COMPANY_SLUG_ALREADY_IN_USE",
+          message: "Este link personalizado já está em uso por outro estabelecimento.",
+        });
+      }
+      companyColumnUpdates.slug = normalizedSlug;
+    }
     const appearance = {
       ...nested,
       ...(palette ? { palette } : {}),
@@ -109,19 +187,33 @@ export async function companySettingsRoutes(app: FastifyInstance) {
           ...(hasAppearance ? { appearance: sql`coalesce(${CompanySettingsTable.appearance}, '{}'::jsonb) || ${JSON.stringify(appearance)}::jsonb` } : {}),
         },
       });
-    if (region) {
-      await db.transaction(async (tx) => {
-        await updateCompanyCurrency(tx, companyId, region.currency);
-        await tx.update(CompanyTable).set({ timezone: region.timezone, ...companySurveyUpdates, updatedAt: new Date() })
-          .where(eq(CompanyTable.id, companyId));
-        await writePreferences(tx);
-      });
-    } else {
-      if (Object.keys(companySurveyUpdates).length > 0) {
-        await db.update(CompanyTable).set({ ...companySurveyUpdates, updatedAt: new Date() })
-          .where(eq(CompanyTable.id, companyId));
+    try {
+      if (region) {
+        await db.transaction(async (tx) => {
+          await updateCompanyCurrency(tx, companyId, region.currency);
+          await tx.update(CompanyTable).set({ timezone: region.timezone, ...companyColumnUpdates, updatedAt: new Date() })
+            .where(eq(CompanyTable.id, companyId));
+          await writePreferences(tx);
+        });
+      } else {
+        if (Object.keys(companyColumnUpdates).length > 0) {
+          await db.update(CompanyTable).set({ ...companyColumnUpdates, updatedAt: new Date() })
+            .where(eq(CompanyTable.id, companyId));
+        }
+        await writePreferences(db);
       }
-      await writePreferences(db);
+    } catch (error) {
+      const pgCode = typeof error === "object" && error !== null
+        ? ((error as { code?: string; cause?: { code?: string } }).code ??
+          (error as { cause?: { code?: string } }).cause?.code)
+        : undefined;
+      if (pgCode === "23505" && companyColumnUpdates.slug) {
+        return reply.code(409).send({
+          code: "COMPANY_SLUG_ALREADY_IN_USE",
+          message: "Este link personalizado já está em uso por outro estabelecimento.",
+        });
+      }
+      throw error;
     }
     return snapshot(companyId);
   }
