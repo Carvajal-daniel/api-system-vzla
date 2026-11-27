@@ -10,6 +10,94 @@ const subscriptionPayments = z.object({ data: z.array(entity.extend({
   status: z.string(), dueDate: z.string(), originalDueDate: z.string().nullish(),
 })) });
 
+const createdSubaccountSchema = z.object({
+  id: z.string().min(1),
+  apiKey: z.string().min(1),
+  walletId: z.string().min(1),
+  name: z.string().optional(),
+  email: z.string().optional(),
+});
+
+export interface AsaasSubaccountInput {
+  name: string;
+  email: string;
+  cpfCnpj: string;
+  mobilePhone: string;
+  incomeValue: number;
+  address?: string | undefined;
+  addressNumber?: string | undefined;
+  postalCode?: string | undefined;
+}
+
+export interface AsaasSubaccountResult {
+  accountId: string;
+  apiKey: string;
+  walletId: string;
+  accountLabel: string;
+}
+
+function asaasBaseUrl() {
+  return process.env.ASAAS_ENVIRONMENT === "production"
+    ? "https://api.asaas.com/v3"
+    : "https://api-sandbox.asaas.com/v3";
+}
+
+// Cria subconta expressa no Asaas usando a chave mestra da plataforma, evitando cópia manual de API Key pelo dono.
+export async function createAsaasSubaccount(
+  masterApiKey: string,
+  input: AsaasSubaccountInput,
+  transport: typeof fetch = fetch,
+): Promise<AsaasSubaccountResult> {
+  try {
+    const response = await transport(asaasBaseUrl() + "/accounts", {
+      method: "POST",
+      headers: {
+        access_token: masterApiKey,
+        "Content-Type": "application/json",
+        "User-Agent": "Atelier-Agenda/1.0",
+      },
+      body: JSON.stringify({
+        name: input.name,
+        email: input.email,
+        cpfCnpj: input.cpfCnpj.replace(/\D/g, ""),
+        mobilePhone: input.mobilePhone.replace(/\D/g, ""),
+        incomeValue: input.incomeValue,
+        ...(input.address ? { address: input.address } : {}),
+        ...(input.addressNumber ? { addressNumber: input.addressNumber } : {}),
+        ...(input.postalCode ? { postalCode: input.postalCode.replace(/\D/g, "") } : {}),
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    if (response.ok) {
+      const parsed = createdSubaccountSchema.parse(await response.json());
+      return {
+        accountId: parsed.id,
+        apiKey: parsed.apiKey,
+        walletId: parsed.walletId,
+        accountLabel: parsed.email?.trim() || parsed.name?.trim() || input.email,
+      };
+    }
+
+    const errorPayload = await response.json().catch(() => null) as {
+      errors?: Array<{ description?: string }>;
+      message?: string;
+    } | null;
+    const gatewayMessage =
+      errorPayload?.errors?.[0]?.description?.trim() ||
+      errorPayload?.message?.trim() ||
+      "Não foi possível criar a subconta no Asaas.";
+    throw new PaymentError(gatewayMessage, "BAD_GATEWAY", "ASAAS_SUBACCOUNT_CREATION_FAILED");
+  } catch (error) {
+    if (error instanceof PaymentError) throw error;
+  }
+  throw new PaymentError(
+    "Não foi possível criar a subconta no Asaas.",
+    "BAD_GATEWAY",
+    "ASAAS_SUBACCOUNT_CREATION_FAILED",
+  );
+}
+
 export class AsaasPaymentAdapter implements PaymentGatewayPort {
   constructor(private readonly key: string, private readonly transport = fetch) {}
 

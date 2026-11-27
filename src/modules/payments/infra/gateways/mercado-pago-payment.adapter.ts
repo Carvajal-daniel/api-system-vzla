@@ -33,6 +33,104 @@ const invoice = z.object({
 
 export type MercadoPagoWebhookTopic = "payment" | "subscription_authorized_payment";
 
+const oauthTokenResponseSchema = z.object({
+  access_token: z.string().min(1),
+  refresh_token: z.string().min(1).optional(),
+  public_key: z.string().min(1).optional(),
+  user_id: providerId,
+  expires_in: z.number().int().positive(),
+});
+
+export interface MercadoPagoOAuthTokens {
+  accessToken: string;
+  refreshToken: string | null;
+  publicKey: string | null;
+  userId: string;
+  expiresIn: number;
+}
+
+// Monta a URL oficial de autorização OAuth do Mercado Pago Brasil com state assinado anti-CSRF.
+export function buildMercadoPagoAuthorizeUrl(input: {
+  clientId: string;
+  redirectUri: string;
+  state: string;
+}) {
+  const params = new URLSearchParams({
+    client_id: input.clientId,
+    response_type: "code",
+    platform_id: "mp",
+    state: input.state,
+    redirect_uri: input.redirectUri,
+  });
+  return `https://auth.mercadopago.com.br/authorization?${params.toString()}`;
+}
+
+async function requestMercadoPagoOAuthToken(
+  payload: Record<string, string>,
+  transport: typeof fetch = fetch,
+): Promise<MercadoPagoOAuthTokens> {
+  try {
+    const response = await transport("https://api.mercadopago.com/oauth/token", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (response.ok) {
+      const parsed = oauthTokenResponseSchema.parse(await response.json());
+      return {
+        accessToken: parsed.access_token,
+        refreshToken: parsed.refresh_token ?? null,
+        publicKey: parsed.public_key ?? null,
+        userId: parsed.user_id,
+        expiresIn: parsed.expires_in,
+      };
+    }
+  } catch {
+    // Mantém credenciais e payload bruto do provedor fora das mensagens de erro expostas.
+  }
+  throw new PaymentError(
+    "Falha ao autenticar conta no Mercado Pago.",
+    "BAD_GATEWAY",
+    "MERCADO_PAGO_OAUTH_FAILED",
+  );
+}
+
+export function exchangeMercadoPagoOAuthCode(
+  input: { clientId: string; clientSecret: string; code: string; redirectUri: string },
+  transport: typeof fetch = fetch,
+): Promise<MercadoPagoOAuthTokens> {
+  return requestMercadoPagoOAuthToken(
+    {
+      grant_type: "authorization_code",
+      client_id: input.clientId,
+      client_secret: input.clientSecret,
+      code: input.code,
+      redirect_uri: input.redirectUri,
+    },
+    transport,
+  );
+}
+
+// Renova automaticamente o access_token OAuth antes do vencimento usando refresh_token.
+export function refreshMercadoPagoOAuthToken(
+  input: { clientId: string; clientSecret: string; refreshToken: string },
+  transport: typeof fetch = fetch,
+): Promise<MercadoPagoOAuthTokens> {
+  return requestMercadoPagoOAuthToken(
+    {
+      grant_type: "refresh_token",
+      client_id: input.clientId,
+      client_secret: input.clientSecret,
+      refresh_token: input.refreshToken,
+    },
+    transport,
+  );
+}
+
 export function mercadoPagoPayerEmail(customer: GatewayCustomer) {
   const email = z.email().safeParse(customer.email?.trim());
   if (!email.success) {
@@ -159,6 +257,14 @@ export class MercadoPagoPaymentAdapter implements PaymentGatewayPort {
     const data = await this.request(z.object({ id: providerId, status: z.string() }),
       "/v1/payments/" + encodeURIComponent(externalId));
     return data.id === externalId && data.status === "cancelled";
+  }
+
+  async refreshAccessToken(input: {
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+  }) {
+    return refreshMercadoPagoOAuthToken(input, this.transport);
   }
 
   async readWebhookPayment(topic: MercadoPagoWebhookTopic, resourceId: string): Promise<GatewayPaymentEvent | null> {

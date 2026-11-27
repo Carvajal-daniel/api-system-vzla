@@ -59,9 +59,33 @@ function eventTimestamp(values: (string | null | undefined)[]) {
   throw new PaymentError("O evento não contém horário de confirmação.", "VALIDATION", "PAYMENT_TIMESTAMP_REQUIRED");
 }
 
-export async function paymentRoutes(app: FastifyInstance) {
-  const repository = new PaymentsRepository();
+const asaasSubaccountBody = z.object({
+  name: z.string().trim().min(2).max(160),
+  email: z.email().max(200),
+  cpfCnpj: z.string().trim().transform((value) => value.replace(/\D/g, "")).refine(
+    (digits) => digits.length === 11 || digits.length === 14,
+    "Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.",
+  ),
+  mobilePhone: z.string().trim().transform((value) => value.replace(/\D/g, "")).refine(
+    (digits) => digits.length >= 10 && digits.length <= 15,
+    "Informe um celular válido com DDD.",
+  ),
+  incomeValue: z.coerce.number().positive().max(100_000_000),
+  address: z.string().trim().max(160).optional(),
+  addressNumber: z.string().trim().max(40).optional(),
+  postalCode: z.string().trim().max(20).optional(),
+});
+
+function frontendSettingsPaymentRedirect(params: Record<string, string>) {
+  const base = (process.env.FRONTEND_URL?.trim() || "http://localhost:3000").replace(/\/+$/, "");
+  const query = new URLSearchParams({ tab: "payments", ...params });
+  return `${base}/owner/settings?${query.toString()}`;
+}
+
+export async function paymentRoutes(app: FastifyInstance, options?: { repository?: PaymentsRepository }) {
+  const repository = options?.repository ?? new PaymentsRepository();
   const owner = { preHandler: [authenticate, authorizeRoles("OWNER")] };
+  const auth = { preHandler: [authenticate] };
 
   app.get("/subscription-plans", owner, async (request) => repository.listPlans(request.actor!.companyId));
   app.post("/subscription-plans", owner, async (request, reply) =>
@@ -91,6 +115,166 @@ export async function paymentRoutes(app: FastifyInstance) {
     webhookToken: z.string().trim().min(32).max(256).optional(),
     staticPixKey: z.string().trim().regex(/^[!-~]{1,77}$/).nullable().optional(),
   }).parse(request.body)));
+
+  app.get("/payments/connection-status", {
+    ...auth,
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Get safe payment connection status for the authenticated tenant without exposing credentials",
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: "object",
+          required: ["provider", "connected", "accountLabel", "walletId", "mpUserId", "depositEnabled", "depositPercentage", "autoRefundHours", "capabilities"],
+          properties: {
+            provider: { type: "string", enum: [...paymentProviders] },
+            connected: { type: "boolean" },
+            accountLabel: { type: ["string", "null"] },
+            walletId: { type: ["string", "null"] },
+            mpUserId: { type: ["string", "null"] },
+            depositEnabled: { type: "boolean" },
+            depositPercentage: { type: "integer" },
+            autoRefundHours: { type: "integer" },
+            capabilities: {
+              type: "object",
+              required: ["mercadoPagoOAuthAvailable", "asaasExpressAvailable"],
+              properties: {
+                mercadoPagoOAuthAvailable: { type: "boolean" },
+                asaasExpressAvailable: { type: "boolean" },
+              },
+            },
+          },
+        },
+        401: { type: "object", properties: { message: { type: "string" } } },
+      },
+    },
+  }, async (request) => repository.getConnectionStatus(request.actor!.companyId));
+
+  app.get("/payments/oauth/mercadopago/authorize", {
+    ...owner,
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Generate 1-click Mercado Pago OAuth authorization URL with signed 15-minute state",
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: "object",
+          required: ["authorizationUrl"],
+          properties: { authorizationUrl: { type: "string", format: "uri" } },
+        },
+        503: {
+          type: "object",
+          properties: { code: { type: "string" }, message: { type: "string" } },
+        },
+      },
+    },
+  }, async (request) => {
+    const actor = request.actor!;
+    const userId = actor.role === "OWNER" ? actor.userId : actor.collaboratorId;
+    return repository.createMercadoPagoAuthorizeUrl(actor.companyId, userId);
+  });
+
+  app.get("/payments/oauth/mercadopago/callback", {
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Public Mercado Pago OAuth callback that exchanges code for tokens and redirects back to settings",
+      querystring: {
+        type: "object",
+        properties: {
+          code: { type: "string" },
+          state: { type: "string" },
+          error: { type: "string" },
+          error_description: { type: "string" },
+        },
+      },
+      response: {
+        302: {
+          type: "null",
+          description: "Redirects to frontend /owner/settings?tab=payments&oauth=success|error",
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const query = z.object({
+      code: z.string().trim().min(1).optional(),
+      state: z.string().trim().min(1).optional(),
+      error: z.string().trim().optional(),
+    }).parse(request.query);
+
+    if (query.error || !query.code || !query.state) {
+      const reason = query.error || "missing_oauth_params";
+      return reply.redirect(frontendSettingsPaymentRedirect({ oauth: "error", reason }));
+    }
+
+    try {
+      await repository.completeMercadoPagoOAuth({ code: query.code, state: query.state });
+      return reply.redirect(frontendSettingsPaymentRedirect({ oauth: "success" }));
+    } catch (error) {
+      const reason = error instanceof PaymentError && error.reasonCode ? error.reasonCode : "oauth_exchange_failed";
+      return reply.redirect(frontendSettingsPaymentRedirect({ oauth: "error", reason }));
+    }
+  });
+
+  app.post("/payments/oauth/mercadopago/disconnect", {
+    ...owner,
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Disconnect Mercado Pago OAuth credentials and disable provider if active",
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: "object",
+          required: ["disconnected", "provider"],
+          properties: {
+            disconnected: { type: "boolean" },
+            provider: { type: "string", enum: [...paymentProviders] },
+          },
+        },
+      },
+    },
+  }, async (request) => repository.disconnectMercadoPago(request.actor!.companyId));
+
+  app.post("/payments/onboarding/asaas/subaccount", {
+    ...owner,
+    schema: {
+      tags: ["Payments Onboarding"],
+      summary: "Create an express Asaas subaccount using the platform master API key",
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: "object",
+        required: ["name", "email", "cpfCnpj", "mobilePhone", "incomeValue"],
+        properties: {
+          name: { type: "string", minLength: 2, maxLength: 160 },
+          email: { type: "string", format: "email", maxLength: 200 },
+          cpfCnpj: { type: "string", minLength: 11, maxLength: 18 },
+          mobilePhone: { type: "string", minLength: 10, maxLength: 20 },
+          incomeValue: { type: "number", exclusiveMinimum: 0 },
+          address: { type: "string", maxLength: 160 },
+          addressNumber: { type: "string", maxLength: 40 },
+          postalCode: { type: "string", maxLength: 20 },
+        },
+      },
+      response: {
+        201: {
+          type: "object",
+          required: ["provider", "connected", "accountLabel", "walletId"],
+          properties: {
+            provider: { type: "string", enum: ["ASAAS"] },
+            connected: { type: "boolean" },
+            accountLabel: { type: "string" },
+            walletId: { type: "string" },
+          },
+        },
+        400: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } },
+        502: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } },
+        503: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = asaasSubaccountBody.parse(request.body);
+    const result = await repository.createAsaasExpressSubaccount(request.actor!.companyId, payload);
+    return reply.code(201).send(result);
+  });
 
   app.post("/payments/pix", owner, async (request, reply) => {
     const payload = z.object({

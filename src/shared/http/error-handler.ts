@@ -11,6 +11,7 @@ const DOMAIN_ERROR_STATUS_MAP: Record<DomainErrorCode, number> = {
   CONFLICT: 409,
   UNPROCESSABLE_ENTITY: 422,
   BAD_GATEWAY: 502,
+  SERVICE_UNAVAILABLE: 503,
 };
 
 export function registerErrorHandler(app: FastifyInstance): void {

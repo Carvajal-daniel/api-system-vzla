@@ -13,6 +13,13 @@ export const CompanyPaymentConfigTable = pgTable("company_payment_configs", {
   providerApiKeyEncrypted: text("provider_api_key_encrypted"),
   webhookTokenEncrypted: text("webhook_token_encrypted"),
   staticPixKey: text("static_pix_key"),
+  // Credenciais OAuth e metadados de subconta para conexão sem fricção (tokens sempre cifrados)
+  providerRefreshTokenEncrypted: text("provider_refresh_token_encrypted"),
+  providerTokenExpiresAt: timestamp("provider_token_expires_at", { withTimezone: true }),
+  providerPublicKey: text("provider_public_key"),
+  providerAccountId: text("provider_account_id"),
+  providerWalletId: text("provider_wallet_id"),
+  providerAccountLabel: text("provider_account_label"),
 }, (t) => [check("company_payment_provider_check", sql`${t.paymentProvider} in ('NONE','ASAAS','MERCADO_PAGO','SANDBOX')`)]);
 
 export const ClientSubscriptionTable = pgTable("client_subscriptions", {

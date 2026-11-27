@@ -5,7 +5,8 @@ export type DomainErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "UNPROCESSABLE_ENTITY"
-  | "BAD_GATEWAY";
+  | "BAD_GATEWAY"
+  | "SERVICE_UNAVAILABLE";
 
 export abstract class DomainError extends Error {
   constructor(

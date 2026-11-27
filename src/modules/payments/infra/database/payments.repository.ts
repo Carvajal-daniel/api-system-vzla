@@ -1,9 +1,13 @@
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import jwt from "jsonwebtoken";
+import { z } from "zod";
+import { getJwtSecret } from "../../../../shared/config/env.js";
 import { db } from "../../../../shared/database/database.js";
 import { PaymentError } from "../../domain/payment-policy.js";
 import { CompanyTable } from "../../../Company/infra/database/schema/companies-schema.js";
+import { CompanySettingsTable } from "../../../Company/infra/database/schema/company-settings-schema.js";
 import { ServiceTable } from "../../../services/infra/database/schema/services-schema.js";
 import { ClientTable } from "../../../clients/infra/database/schema/clients-schema.js";
 import { AppointmentTable } from "../../../appointments/infra/database/schema/appointments-schema.js";
@@ -14,8 +18,15 @@ import { FinancialDocumentTable, ReceiptTable } from "../../../finance/infra/dat
 import { FinanceOrderPaymentTable, FinanceOrderTable } from "../../../finance/infra/database/schema/orders-schema.js";
 import type { ChargeReference, GatewayPaymentEvent, PaymentGatewayPort, PaymentProvider, SubscriptionMethod, WebhookSignatureContext } from "../../domain/payment-gateway.js";
 import { missingPaymentResource, nextMonthlyDate, paymentConflict } from "../../domain/payment-policy.js";
-import { AsaasPaymentAdapter } from "../gateways/asaas-payment.adapter.js";
-import { MercadoPagoPaymentAdapter, mercadoPagoPayerEmail, type MercadoPagoWebhookTopic } from "../gateways/mercado-pago-payment.adapter.js";
+import { AsaasPaymentAdapter, createAsaasSubaccount, type AsaasSubaccountInput } from "../gateways/asaas-payment.adapter.js";
+import {
+  buildMercadoPagoAuthorizeUrl,
+  exchangeMercadoPagoOAuthCode,
+  MercadoPagoPaymentAdapter,
+  mercadoPagoPayerEmail,
+  refreshMercadoPagoOAuthToken,
+  type MercadoPagoWebhookTopic,
+} from "../gateways/mercado-pago-payment.adapter.js";
 import { decryptPaymentSecret, encryptPaymentSecret } from "../gateways/payment-secrets.js";
 import { encodePixCode } from "../gateways/pix-code.js";
 import { SandboxPaymentAdapter } from "../gateways/sandbox-payment.adapter.js";
@@ -37,13 +48,114 @@ function sandboxAllowed() {
   return ["development", "test"].includes(process.env.NODE_ENV ?? "development");
 }
 
-function gateway(config: Config): PaymentGatewayPort {
+const mpOAuthStateSchema = z.object({
+  companyId: z.uuid(),
+  userId: z.uuid(),
+  purpose: z.literal("mp_oauth"),
+});
+
+const DEFAULT_ONLINE_PAYMENT = {
+  enabled: true,
+  depositPercentage: 30,
+  pixKeyType: "CNPJ" as const,
+  pixKey: "",
+  autoRefundHours: 24,
+  noShowPolicy: "Em caso de não comparecimento ou cancelamento com menos de 24 horas, o valor do sinal não será reembolsado.",
+};
+
+function mercadoPagoOAuthCredentials() {
+  const clientId = process.env.MERCADO_PAGO_CLIENT_ID?.trim();
+  const clientSecret = process.env.MERCADO_PAGO_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
+function mercadoPagoRedirectUri() {
+  const explicit = process.env.MERCADO_PAGO_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+  const apiBase = (process.env.API_PUBLIC_URL?.trim() || "http://localhost:3333").replace(/\/+$/, "");
+  return `${apiBase}/payments/oauth/mercadopago/callback`;
+}
+
+// Renova automaticamente o access_token OAuth do Mercado Pago quando faltar menos de 5 minutos para expirar.
+async function ensureFreshMercadoPagoConfig(
+  tx: PaymentTransaction,
+  config: Config,
+  transport: typeof fetch = fetch,
+): Promise<Config> {
+  if (
+    config.paymentProvider !== "MERCADO_PAGO" ||
+    !config.providerRefreshTokenEncrypted ||
+    !config.providerTokenExpiresAt
+  ) {
+    return config;
+  }
+  const expiresSoon = config.providerTokenExpiresAt.getTime() <= Date.now() + 5 * 60_000;
+  if (!expiresSoon) return config;
+
+  const creds = mercadoPagoOAuthCredentials();
+  if (!creds) return config;
+
+  const refreshed = await refreshMercadoPagoOAuthToken(
+    {
+      clientId: creds.clientId,
+      clientSecret: creds.clientSecret,
+      refreshToken: decryptPaymentSecret(config.providerRefreshTokenEncrypted),
+    },
+    transport,
+  );
+
+  const nextFields = {
+    providerApiKeyEncrypted: encryptPaymentSecret(refreshed.accessToken),
+    providerRefreshTokenEncrypted: refreshed.refreshToken
+      ? encryptPaymentSecret(refreshed.refreshToken)
+      : config.providerRefreshTokenEncrypted,
+    providerTokenExpiresAt: new Date(Date.now() + refreshed.expiresIn * 1000),
+    providerPublicKey: refreshed.publicKey ?? config.providerPublicKey,
+  };
+
+  await tx
+    .update(CompanyPaymentConfigTable)
+    .set(nextFields)
+    .where(eq(CompanyPaymentConfigTable.companyId, config.companyId));
+
+  return { ...config, ...nextFields };
+}
+
+async function enableTenantOnlinePayment(tx: PaymentTransaction, companyId: string) {
+  const [settingsRow] = await tx
+    .select({ preferences: CompanySettingsTable.preferences })
+    .from(CompanySettingsTable)
+    .where(eq(CompanySettingsTable.companyId, companyId))
+    .limit(1);
+
+  const currentPreferences = settingsRow?.preferences ?? {};
+  const nextOnlinePayment = {
+    ...DEFAULT_ONLINE_PAYMENT,
+    ...(currentPreferences.onlinePayment ?? {}),
+    enabled: true,
+  };
+  const nextPreferences = {
+    ...currentPreferences,
+    onlinePayment: nextOnlinePayment,
+  };
+
+  await tx
+    .insert(CompanySettingsTable)
+    .values({ companyId, preferences: nextPreferences })
+    .onConflictDoUpdate({
+      target: CompanySettingsTable.companyId,
+      set: { preferences: nextPreferences },
+    });
+}
+
+function gateway(config: Config, transport: typeof fetch = fetch): PaymentGatewayPort {
   if (config.paymentProvider === "SANDBOX" && sandboxAllowed()) return sandbox;
   if (config.paymentProvider === "ASAAS" && config.providerApiKeyEncrypted) {
-    return new AsaasPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted));
+    return new AsaasPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted), transport);
   }
   if (config.paymentProvider === "MERCADO_PAGO" && config.providerApiKeyEncrypted) {
-    return new MercadoPagoPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted));
+    return new MercadoPagoPaymentAdapter(decryptPaymentSecret(config.providerApiKeyEncrypted), transport);
   }
   throw paymentConflict("PAYMENT_PROVIDER_UNAVAILABLE", "Configure um provedor de pagamentos ativo.");
 }
@@ -60,7 +172,19 @@ async function tenant(tx: PaymentTransaction, companyId: string) {
 
 async function configuration(tx: PaymentTransaction, companyId: string): Promise<Config> {
   const [config] = await tx.select().from(CompanyPaymentConfigTable).where(eq(CompanyPaymentConfigTable.companyId, companyId));
-  return config ?? { companyId, paymentProvider: "NONE", providerApiKeyEncrypted: null, webhookTokenEncrypted: null, staticPixKey: null };
+  return config ?? {
+    companyId,
+    paymentProvider: "NONE",
+    providerApiKeyEncrypted: null,
+    webhookTokenEncrypted: null,
+    staticPixKey: null,
+    providerRefreshTokenEncrypted: null,
+    providerTokenExpiresAt: null,
+    providerPublicKey: null,
+    providerAccountId: null,
+    providerWalletId: null,
+    providerAccountLabel: null,
+  };
 }
 
 async function clientFor(tx: PaymentTransaction, companyId: string, clientId: string) {
@@ -89,6 +213,8 @@ async function refreshOverdue(tx: PaymentTransaction, companyId: string, today: 
 }
 
 export class PaymentsRepository {
+  constructor(private readonly transport: typeof fetch = fetch) {}
+
   listPlans(companyId: string) {
     return db.select().from(SubscriptionPlanTable).where(eq(SubscriptionPlanTable.companyId, companyId)).orderBy(SubscriptionPlanTable.name);
   }
@@ -123,8 +249,8 @@ export class PaymentsRepository {
   }) {
     const reserved = await db.transaction(async (tx) => {
       await lockTenant(tx, companyId);
-      const config = await configuration(tx, companyId);
-      const provider = gateway(config);
+      const config = await ensureFreshMercadoPagoConfig(tx, await configuration(tx, companyId), this.transport);
+      const provider = gateway(config, this.transport);
       const company = await tenant(tx, companyId);
       if (company.currency !== "BRL") throw paymentConflict("PAYMENT_CURRENCY_UNSUPPORTED", "Pagamentos online usam BRL.");
       const client = await clientFor(tx, companyId, input.clientId);
@@ -210,15 +336,230 @@ export class PaymentsRepository {
           .where(and(eq(PaymentChargeTable.companyId, companyId), eq(PaymentChargeTable.status, "PENDING"), ne(PaymentChargeTable.paymentProvider, "NONE"))).limit(1);
         if (subscription || charge) throw paymentConflict("PAYMENT_PROVIDER_IN_USE", "Existem assinaturas ou cobranças em andamento.");
       }
-      const config = {
-        companyId, paymentProvider: input.paymentProvider, staticPixKey: input.staticPixKey === undefined ? previous.staticPixKey : input.staticPixKey,
-        providerApiKeyEncrypted: credential, webhookTokenEncrypted: webhook,
+      const config: Config = {
+        companyId,
+        paymentProvider: input.paymentProvider,
+        staticPixKey: input.staticPixKey === undefined ? previous.staticPixKey : input.staticPixKey,
+        providerApiKeyEncrypted: credential,
+        webhookTokenEncrypted: webhook,
+        providerRefreshTokenEncrypted: sameProvider ? previous.providerRefreshTokenEncrypted : null,
+        providerTokenExpiresAt: sameProvider ? previous.providerTokenExpiresAt : null,
+        providerPublicKey: sameProvider ? previous.providerPublicKey : null,
+        providerAccountId: sameProvider ? previous.providerAccountId : null,
+        providerWalletId: sameProvider ? previous.providerWalletId : null,
+        providerAccountLabel: sameProvider ? previous.providerAccountLabel : null,
       };
       await tx.insert(CompanyPaymentConfigTable).values(config).onConflictDoUpdate({
         target: CompanyPaymentConfigTable.companyId, set: config,
       });
       return this.publicConfig(config);
     });
+  }
+
+  // Gera URL OAuth do Mercado Pago com state JWT assinado (validade 15 min) para proteção anti-CSRF.
+  createMercadoPagoAuthorizeUrl(companyId: string, userId: string) {
+    const creds = mercadoPagoOAuthCredentials();
+    if (!creds) {
+      throw new PaymentError(
+        "Integração OAuth do Mercado Pago não configurada na plataforma.",
+        "SERVICE_UNAVAILABLE",
+        "OAUTH_PROVIDER_NOT_CONFIGURED",
+      );
+    }
+    const state = jwt.sign(
+      { companyId, userId, purpose: "mp_oauth" },
+      getJwtSecret(),
+      { expiresIn: "15m" },
+    );
+    const authorizationUrl = buildMercadoPagoAuthorizeUrl({
+      clientId: creds.clientId,
+      redirectUri: mercadoPagoRedirectUri(),
+      state,
+    });
+    return { authorizationUrl };
+  }
+
+  // Valida state assinado, troca code por tokens OAuth e ativa o Mercado Pago no tenant.
+  async completeMercadoPagoOAuth(input: { code: string; state: string }) {
+    let payload: z.infer<typeof mpOAuthStateSchema>;
+    try {
+      const decoded = jwt.verify(input.state, getJwtSecret());
+      payload = mpOAuthStateSchema.parse(decoded);
+    } catch {
+      throw new PaymentError(
+        "Estado OAuth inválido ou expirado. Inicie a conexão novamente.",
+        "VALIDATION",
+        "OAUTH_INVALID_STATE",
+      );
+    }
+
+    const creds = mercadoPagoOAuthCredentials();
+    if (!creds) {
+      throw new PaymentError(
+        "Integração OAuth do Mercado Pago não configurada na plataforma.",
+        "SERVICE_UNAVAILABLE",
+        "OAUTH_PROVIDER_NOT_CONFIGURED",
+      );
+    }
+
+    const tokens = await exchangeMercadoPagoOAuthCode(
+      {
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        code: input.code,
+        redirectUri: mercadoPagoRedirectUri(),
+      },
+      this.transport,
+    );
+
+    await db.transaction(async (tx) => {
+      await lockTenant(tx, payload.companyId);
+      await tenant(tx, payload.companyId);
+      const previous = await configuration(tx, payload.companyId);
+      const webhookTokenEncrypted =
+        previous.paymentProvider === "MERCADO_PAGO" && previous.webhookTokenEncrypted
+          ? previous.webhookTokenEncrypted
+          : encryptPaymentSecret(randomBytes(32).toString("hex"));
+
+      const nextConfig: Config = {
+        companyId: payload.companyId,
+        paymentProvider: "MERCADO_PAGO",
+        providerApiKeyEncrypted: encryptPaymentSecret(tokens.accessToken),
+        webhookTokenEncrypted,
+        staticPixKey: previous.staticPixKey,
+        providerRefreshTokenEncrypted: tokens.refreshToken
+          ? encryptPaymentSecret(tokens.refreshToken)
+          : null,
+        providerTokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
+        providerPublicKey: tokens.publicKey,
+        providerAccountId: tokens.userId,
+        providerWalletId: null,
+        providerAccountLabel: `Mercado Pago #${tokens.userId}`,
+      };
+
+      await tx.insert(CompanyPaymentConfigTable).values(nextConfig).onConflictDoUpdate({
+        target: CompanyPaymentConfigTable.companyId,
+        set: nextConfig,
+      });
+
+      await enableTenantOnlinePayment(tx, payload.companyId);
+    });
+
+    return { companyId: payload.companyId, mpUserId: tokens.userId };
+  }
+
+  // Revoga/limpa os tokens OAuth do tenant e desativa o provedor caso estivesse usando Mercado Pago.
+  async disconnectMercadoPago(companyId: string) {
+    return db.transaction(async (tx) => {
+      await lockTenant(tx, companyId);
+      const previous = await configuration(tx, companyId);
+      const wasMercadoPago = previous.paymentProvider === "MERCADO_PAGO";
+      const nextConfig: Config = {
+        companyId,
+        paymentProvider: wasMercadoPago ? "NONE" : previous.paymentProvider,
+        providerApiKeyEncrypted: wasMercadoPago ? null : previous.providerApiKeyEncrypted,
+        webhookTokenEncrypted: wasMercadoPago ? null : previous.webhookTokenEncrypted,
+        staticPixKey: previous.staticPixKey,
+        providerRefreshTokenEncrypted: null,
+        providerTokenExpiresAt: null,
+        providerPublicKey: null,
+        providerAccountId: wasMercadoPago ? null : previous.providerAccountId,
+        providerWalletId: wasMercadoPago ? null : previous.providerWalletId,
+        providerAccountLabel: wasMercadoPago ? null : previous.providerAccountLabel,
+      };
+
+      await tx.insert(CompanyPaymentConfigTable).values(nextConfig).onConflictDoUpdate({
+        target: CompanyPaymentConfigTable.companyId,
+        set: nextConfig,
+      });
+
+      return { disconnected: true, provider: nextConfig.paymentProvider };
+    });
+  }
+
+  // Cria subconta expressa no Asaas via chave mestra da plataforma e conecta o tenant sem expor a apiKey.
+  async createAsaasExpressSubaccount(companyId: string, input: AsaasSubaccountInput) {
+    const masterApiKey = process.env.ASAAS_MASTER_API_KEY?.trim();
+    if (!masterApiKey) {
+      throw new PaymentError(
+        "Criação automática de subconta Asaas não configurada no servidor.",
+        "SERVICE_UNAVAILABLE",
+        "ASAAS_MASTER_NOT_CONFIGURED",
+      );
+    }
+
+    const created = await createAsaasSubaccount(masterApiKey, input, this.transport);
+
+    await db.transaction(async (tx) => {
+      await lockTenant(tx, companyId);
+      await tenant(tx, companyId);
+      const previous = await configuration(tx, companyId);
+      const webhookTokenEncrypted =
+        previous.paymentProvider === "ASAAS" && previous.webhookTokenEncrypted
+          ? previous.webhookTokenEncrypted
+          : encryptPaymentSecret(randomBytes(32).toString("hex"));
+
+      const nextConfig: Config = {
+        companyId,
+        paymentProvider: "ASAAS",
+        providerApiKeyEncrypted: encryptPaymentSecret(created.apiKey),
+        webhookTokenEncrypted,
+        staticPixKey: previous.staticPixKey,
+        providerRefreshTokenEncrypted: null,
+        providerTokenExpiresAt: null,
+        providerPublicKey: null,
+        providerAccountId: created.accountId,
+        providerWalletId: created.walletId,
+        providerAccountLabel: created.accountLabel,
+      };
+
+      await tx.insert(CompanyPaymentConfigTable).values(nextConfig).onConflictDoUpdate({
+        target: CompanyPaymentConfigTable.companyId,
+        set: nextConfig,
+      });
+
+      await enableTenantOnlinePayment(tx, companyId);
+    });
+
+    return {
+      provider: "ASAAS" as const,
+      connected: true,
+      accountLabel: created.accountLabel,
+      walletId: created.walletId,
+    };
+  }
+
+  // Retorna status seguro da conexão de pagamentos sem jamais vazar chaves ou tokens cifrados/planos.
+  async getConnectionStatus(companyId: string) {
+    const [[configRow], [settingsRow]] = await Promise.all([
+      db.select().from(CompanyPaymentConfigTable).where(eq(CompanyPaymentConfigTable.companyId, companyId)).limit(1),
+      db.select({ preferences: CompanySettingsTable.preferences }).from(CompanySettingsTable).where(eq(CompanySettingsTable.companyId, companyId)).limit(1),
+    ]);
+
+    const provider: Config["paymentProvider"] = configRow?.paymentProvider ?? "NONE";
+    const connected =
+      provider === "SANDBOX"
+        ? sandboxAllowed()
+        : provider === "ASAAS" || provider === "MERCADO_PAGO"
+          ? Boolean(configRow?.providerApiKeyEncrypted)
+          : false;
+
+    const onlinePayment = settingsRow?.preferences?.onlinePayment ?? null;
+
+    return {
+      provider,
+      connected,
+      accountLabel: configRow?.providerAccountLabel ?? null,
+      walletId: configRow?.providerWalletId ?? null,
+      mpUserId: provider === "MERCADO_PAGO" ? (configRow?.providerAccountId ?? null) : null,
+      depositEnabled: onlinePayment?.enabled ?? false,
+      depositPercentage: onlinePayment?.depositPercentage ?? 30,
+      autoRefundHours: onlinePayment?.autoRefundHours ?? 24,
+      capabilities: {
+        mercadoPagoOAuthAvailable: Boolean(mercadoPagoOAuthCredentials()),
+        asaasExpressAvailable: Boolean(process.env.ASAAS_MASTER_API_KEY?.trim()),
+      },
+    };
   }
 
   async createPix(companyId: string, input: {
@@ -229,7 +570,7 @@ export class PaymentsRepository {
       await lockTenant(tx, companyId);
       const now = new Date();
       const company = await tenant(tx, companyId);
-      const config = await configuration(tx, companyId);
+      const config = await ensureFreshMercadoPagoConfig(tx, await configuration(tx, companyId), this.transport);
       if (company.currency !== "BRL") throw paymentConflict("PAYMENT_CURRENCY_UNSUPPORTED", "Pagamentos online usam BRL.");
       const client = await clientFor(tx, companyId, input.clientId);
       if (config.paymentProvider === "MERCADO_PAGO") {
@@ -282,7 +623,7 @@ export class PaymentsRepository {
       const { config, company, client, ref } = reserved;
       const qr = config.paymentProvider === "NONE"
         ? await encodePixCode(config.staticPixKey!, company.companyName, charge.amountCents, charge.txid)
-        : await gateway(config).createDynamicPixCharge({
+        : await gateway(config, this.transport).createDynamicPixCharge({
           txid: charge.txid, customer: { ...client, document: input.document },
           amountCents: charge.amountCents, dueDate: ref.dueDate ?? localDay(new Date(), company.timezone),
           expiresAt: charge.expiresAt!, shortExpiry: input.referenceType === "APPOINTMENT_DEPOSIT",
@@ -427,7 +768,7 @@ export class PaymentsRepository {
         }
         return { processed: false };
       }
-      const config = await configuration(tx, companyId);
+      const config = await ensureFreshMercadoPagoConfig(tx, await configuration(tx, companyId), this.transport);
       if (provider === "ASAAS") {
         const token = config.webhookTokenEncrypted && decryptPaymentSecret(config.webhookTokenEncrypted);
         if (!token || !new AsaasPaymentAdapter("").verifyWebhookSignature(signature, token)) {
