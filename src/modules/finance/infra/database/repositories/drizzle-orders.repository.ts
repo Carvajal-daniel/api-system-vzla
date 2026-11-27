@@ -6,6 +6,7 @@ import {
   InventoryItemTable,
   InventoryMovementTable,
 } from "../../../../inventory/infra/database/schema/inventory-schema.js";
+import { assertNoConfirmedOrderCharge, assertNoPendingOrderCharge, coveredOrder, saveBenefitUse } from "../../../../payments/infra/database/club-order-coverage.js";
 import { CollectionsError } from "../../../domain/collections.js";
 import type {
   ComputedOrderDraft,
@@ -111,7 +112,8 @@ export class DrizzleOrdersRepository implements OrdersRepository {
         }
       }
 
-      // Valida que todos os colaboradores atribuídos pertencem à mesma empresa (isolamento multi-tenant)
+      const coverage = await coveredOrder(tx, { companyId, draft, appointmentId: draft.appointmentId, timezone: company.timezone });
+      draft = coverage.draft;
       await this.assertValidCollaborators(tx, companyId, draft.items);
 
       const [createdOrder] = await tx
@@ -135,6 +137,7 @@ export class DrizzleOrdersRepository implements OrdersRepository {
         .returning({ id: FinanceOrderTable.id });
 
       const newOrderId = createdOrder!.id;
+      if (coverage.use) await saveBenefitUse(tx, companyId, newOrderId, coverage.use);
 
       await tx.insert(FinanceOrderItemTable).values(
         draft.items.map((item) => ({
@@ -283,6 +286,8 @@ export class DrizzleOrdersRepository implements OrdersRepository {
         throw new CollectionsError("CONFLICT", "FINANCE_ORDER_NOT_CLOSED");
       }
 
+      await assertNoConfirmedOrderCharge(tx, companyId, orderId);
+
       // Altera status de CLOSED para OPEN e grava log de auditoria na mesma transação
       await tx
         .update(FinanceOrderTable)
@@ -342,6 +347,10 @@ export class DrizzleOrdersRepository implements OrdersRepository {
         throw new CollectionsError("NOT_FOUND", "COMPANY_NOT_FOUND");
       }
 
+      await assertNoPendingOrderCharge(tx, companyId, orderId);
+      const coverage = await coveredOrder(tx, { companyId, draft, appointmentId: existing.appointmentId, timezone: company.timezone, orderId });
+      draft = coverage.draft;
+      await saveBenefitUse(tx, companyId, orderId, coverage.use);
       await this.assertValidCollaborators(tx, companyId, draft.items);
 
       // Calcula delta de estoque de produtos entre os itens anteriores e os novos itens

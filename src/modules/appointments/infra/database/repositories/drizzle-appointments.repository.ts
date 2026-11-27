@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { Appointment } from "../../../domain/entities/appointment.entity.js";
 import {
@@ -28,6 +28,9 @@ import {
 
 import { AppointmentPolicyService } from "../../../domain/services/appointment-policy.service.js";
 import { recordSaasTelemetry } from "../../../../billing/infra/database/repositories/drizzle-saas-telemetry.repository.js";
+import { ClientTable } from "../../../../clients/infra/database/schema/clients-schema.js";
+import { ClientSubscriptionTable, ClubBenefitUseTable } from "../../../../payments/infra/database/schema/payments-schema.js";
+import type { ClubMembershipPolicy } from "../../../domain/services/appointment-policy.service.js";
 import { ClubSubscriptionTable, SubscriptionPlanTable } from "../schema/subscription-plans-schema.js";
 
 const ACTIVE_BOOKING_STATUSES: readonly AppointmentStatusValue[] = [
@@ -85,7 +88,32 @@ async function assertSlotFree(tx: Transaction, appointment: Appointment, exceptI
   if (conflict) throw new AppointmentTimeConflictError();
 }
 
-async function findMembership(tx: Transaction, appointment: Appointment) {
+async function findMembership(tx: Transaction, appointment: Appointment, now: Date): Promise<(ClubMembershipPolicy & { included?: boolean }) | undefined> {
+  const [current] = await tx.select({ subscription: ClientSubscriptionTable, plan: SubscriptionPlanTable })
+    .from(ClientSubscriptionTable)
+    .innerJoin(ClientTable, and(eq(ClientTable.companyId, appointment.companyId), eq(ClientTable.id, ClientSubscriptionTable.clientId)))
+    .innerJoin(SubscriptionPlanTable, and(eq(SubscriptionPlanTable.companyId, appointment.companyId), eq(SubscriptionPlanTable.id, ClientSubscriptionTable.planId)))
+    .where(and(eq(ClientSubscriptionTable.companyId, appointment.companyId), eq(ClientTable.phone, appointment.clientPhone),
+      ne(ClientSubscriptionTable.status, "PENDING_PAYMENT")))
+    .orderBy(sql`${ClientSubscriptionTable.status} = 'CANCELED'`, desc(ClientSubscriptionTable.currentPeriodEnd)).limit(1);
+  if (current) {
+    const { subscription, plan } = current;
+    if (subscription.status === "PENDING_PAYMENT") return undefined;
+    const dueAt = subscription.currentPeriodEnd;
+    const graceEnd = dueAt && new Date(dueAt.getTime() + plan.gracePeriodDays * 86_400_000);
+    const status = subscription.status === "ACTIVE" && dueAt && dueAt <= now ? "PAST_DUE" : subscription.status;
+    let included = plan.includedServiceIds.includes(appointment.serviceId) &&
+      !!subscription.currentPeriodStart && appointment.startsAt >= subscription.currentPeriodStart &&
+      !!graceEnd && appointment.startsAt < graceEnd;
+    if (included && plan.maxMonthlyUses !== null && subscription.currentPeriodStart) {
+      const [{ used } = { used: 0 }] = await tx.select({
+        used: sql<number>`coalesce(sum(${ClubBenefitUseTable.quantity}), 0)`.mapWith(Number),
+      }).from(ClubBenefitUseTable).where(and(eq(ClubBenefitUseTable.subscriptionId, subscription.id),
+        eq(ClubBenefitUseTable.periodStart, subscription.currentPeriodStart)));
+      included = used < plan.maxMonthlyUses;
+    }
+    return { status, dueAt, included, allowedDaysOfWeek: plan.allowedDaysOfWeek, gracePeriodDays: plan.gracePeriodDays };
+  }
   const [membership] = await tx.select({
     status: ClubSubscriptionTable.status,
     dueAt: ClubSubscriptionTable.dueAt,
@@ -104,9 +132,8 @@ async function findMembership(tx: Transaction, appointment: Appointment) {
 async function recordBooking(tx: Transaction, companyId: string, policy: BookingPolicyOptions) {
   const key = `club-snapshot:${companyId}`;
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${key}))`);
-  const [{ activeClubSubscribers } = { activeClubSubscribers: 0 }] = await tx
-    .select({ activeClubSubscribers: count() }).from(ClubSubscriptionTable)
-    .where(and(eq(ClubSubscriptionTable.companyId, companyId), eq(ClubSubscriptionTable.status, "ACTIVE")));
+  const result = await tx.execute<{ total: string }>(sql`select count_active_club_subscribers(${companyId}) as total`);
+  const activeClubSubscribers = Number(result.rows[0]?.total ?? 0);
   await recordSaasTelemetry(tx, companyId, policy.now, {
     activeClubSubscribers,
     ...(policy.ai ? { appointmentsCreatedByAi: 1 } : { appointmentsCreatedManual: 1 }),
@@ -133,7 +160,7 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
       let usesClubBenefit = false;
       if (policy && !isGuest) {
         await lockClient(tx, appointment);
-        const membership = await findMembership(tx, appointment);
+        const membership = await findMembership(tx, appointment, policy.now);
         const [existing] = membership?.status === "ACTIVE" ? await tx.select().from(AppointmentTable).where(and(
           eq(AppointmentTable.companyId, appointment.companyId),
           eq(AppointmentTable.clientPhone, appointment.clientPhone),
@@ -147,7 +174,7 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
           dayOfWeek: policy.dayOfWeek,
           now: policy.now,
           isGuest,
-          payFullPrice: policy.payFullPrice ?? false,
+          payFullPrice: policy.payFullPrice === true || membership?.included === false,
           ...(existing ? { existing: {
             id: existing.id,
             startsAt: existing.startsAt.toISOString(),
@@ -208,13 +235,13 @@ export class DrizzleAppointmentsRepository implements AppointmentsRepository {
       }
 
       if (policy?.ai) AppointmentPolicyService.assertAiCanChange(source.startsAt, new Date(Math.max(Date.now(), policy.now.getTime())));
-      const membership = policy && !source.isGuest ? await findMembership(tx, appointment) : undefined;
+      const membership = policy && !source.isGuest ? await findMembership(tx, appointment, policy.now) : undefined;
       const swap = Boolean(policy?.ai && membership?.status === "ACTIVE");
 
       const usesClubBenefit = policy && source.usesClubBenefit
         ? AppointmentPolicyService.evaluate({
             membership, now: policy.now, dayOfWeek: policy.dayOfWeek,
-            isGuest: source.isGuest, payFullPrice: policy.payFullPrice ?? false,
+            isGuest: source.isGuest, payFullPrice: policy.payFullPrice === true || membership?.included === false,
           })
         : source.usesClubBenefit;
       const price = usesClubBenefit ? 0 : source.clubFullPriceInCents ?? source.servicePriceInCentsSnapshot;

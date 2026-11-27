@@ -16,6 +16,7 @@ import { FinanceOrderItemTable, FinanceOrderTable } from "../schema/orders-schem
 import { CommissionDeductionApplicationTable, CommissionDeductionTable, CommissionSettlementTable, ExpenseTable } from "../schema/outflows-schema.js";
 import { expenseList, localDay, paymentInstant, type FinanceQuery } from "./outflow-projections.js";
 
+import { hasConfirmedOrderPayment, hasOnlineOrderForAppointment } from "./online-order.js";
 import { listCommissionDeductions, listDeductionApplications } from "./commission-deductions.js";
 
 const notFound = () => new CollectionsError("NOT_FOUND", "FINANCE_RECORD_NOT_FOUND");
@@ -60,6 +61,7 @@ function commissionRows(query: FinanceQuery, companyId: string, timezone: string
     eq(FinancialDocumentTable.appointmentId, AppointmentTable.id),
   )).where(and(
     eq(AppointmentTable.companyId, companyId),
+    sql`not ${hasOnlineOrderForAppointment(AppointmentTable.companyId, AppointmentTable.id)}`,
     gte(day, sql`${filter.from}::date`), lte(day, sql`${filter.to}::date`),
     filter.collaboratorId ? eq(AppointmentTable.collaboratorId, filter.collaboratorId) : undefined,
     payableOnly ? and(eq(AppointmentTable.status, "COMPLETED"), isNull(FinancialDocumentTable.commissionPaidAt),
@@ -258,6 +260,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
         commissionStatus: FinanceOrderItemTable.commissionStatus,
         itemType: FinanceOrderItemTable.itemType,
         appointmentId: FinanceOrderTable.appointmentId,
+        onlinePayment: hasConfirmedOrderPayment(FinanceOrderTable.companyId, FinanceOrderTable.id),
       })
         .from(FinanceOrderItemTable)
         .innerJoin(FinanceOrderTable, and(
@@ -316,7 +319,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
     }
     for (const orderItem of orderItemRows) {
       if (!orderItem.collaboratorId || orderItem.commissionCents <= 0) continue;
-      if (orderItem.itemType === "SERVICE" && orderItem.appointmentId) continue;
+      if (orderItem.itemType === "SERVICE" && orderItem.appointmentId && !orderItem.onlinePayment) continue;
       const person = byId.get(orderItem.collaboratorId);
       if (!person) continue;
       if (orderItem.commissionStatus === "PENDING") person.payableInCents += orderItem.commissionCents;
@@ -391,6 +394,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
           eq(AppointmentTable.companyId, companyId),
           eq(AppointmentTable.collaboratorId, collaboratorId),
           eq(AppointmentTable.status, "COMPLETED"),
+          sql`not ${hasOnlineOrderForAppointment(AppointmentTable.companyId, AppointmentTable.id)}`,
           gte(appointmentDay, sql`${period.from}::date`),
           lte(appointmentDay, sql`${period.to}::date`),
         ))
@@ -407,6 +411,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
         commissionStatus: FinanceOrderItemTable.commissionStatus,
         settlementId: FinanceOrderItemTable.commissionSettlementId,
         appointmentId: FinanceOrderTable.appointmentId,
+        onlinePayment: hasConfirmedOrderPayment(FinanceOrderTable.companyId, FinanceOrderTable.id),
       })
         .from(FinanceOrderItemTable)
         .innerJoin(FinanceOrderTable, and(
@@ -466,7 +471,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
 
     for (const row of orderItems) {
       if (row.commissionCents <= 0) continue;
-      if (row.itemType === "SERVICE" && row.appointmentId) continue;
+      if (row.itemType === "SERVICE" && row.appointmentId && !row.onlinePayment) continue;
       const item: CommissionDetailItem = {
         id: row.id,
         source: "ORDER",
@@ -554,6 +559,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
           commissionCents: FinanceOrderItemTable.commissionCents,
           itemType: FinanceOrderItemTable.itemType,
           appointmentId: FinanceOrderTable.appointmentId,
+        onlinePayment: hasConfirmedOrderPayment(FinanceOrderTable.companyId, FinanceOrderTable.id),
         })
           .from(FinanceOrderItemTable)
           .innerJoin(FinanceOrderTable, and(
@@ -572,7 +578,7 @@ export class DrizzleOutflowsRepository implements OutflowsRepository {
       const eligible = rows.filter((row) => row.documentId &&
         getCommissionStatus("COMPLETED", row.generated, row.paidAt, row.collected, row.net ?? row.price) === "READY");
       const eligibleOrderItems = pendingOrderItems.filter(
-        (item) => item.commissionCents > 0 && !(item.itemType === "SERVICE" && item.appointmentId),
+        (item) => item.commissionCents > 0 && !(item.itemType === "SERVICE" && item.appointmentId && !item.onlinePayment),
       );
       const grossCents =
         eligible.reduce((sum, row) => sum + row.generated, 0) +
