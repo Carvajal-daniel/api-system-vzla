@@ -39,7 +39,7 @@ describe.skipIf(!process.env.PHASE_1_TEST_DATABASE_URL)("Phase 1 on PostgreSQL",
     collaboratorIds = [randomUUID(), randomUUID()];
     serviceId = randomUUID();
     await db.insert(CompanyTable).values({
-      id: companyId, companyName: "Phase 1 test", name: "Owner", phone,
+      id: companyId, companyName: "Phase 1 test", slug: `phase-1-${companyId.slice(0, 8)}`, name: "Owner", phone,
       email: `${companyId}@example.test`, password: "fixture", timezone: "UTC",
     });
     await db.insert(CollaboratorTable).values(collaboratorIds.map((id) => ({

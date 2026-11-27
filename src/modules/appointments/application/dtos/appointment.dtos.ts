@@ -44,6 +44,8 @@ export interface CreatePublicAppointmentInputDTO {
   startsAt: Date;
   clientName: string;
   clientPhone: string;
+  initialStatus?: InitialAppointmentStatusValue | undefined;
+  payFullPrice?: boolean | undefined;
   publicDetails?: PublicBookingDetails | undefined;
   now?: Date | undefined;
   actorSource?: SchedulingActorSource | undefined;

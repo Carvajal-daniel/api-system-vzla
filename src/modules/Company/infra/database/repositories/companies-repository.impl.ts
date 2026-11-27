@@ -14,6 +14,7 @@ export class CompanyRepositoryDB implements CompaniesRepository {
       .values({
         id: company.id,
         companyName: company.companyName,
+        slug: company.slug,
         name: company.name,
         phone: company.phone,
         email: company.email,

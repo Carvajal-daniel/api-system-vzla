@@ -3,10 +3,12 @@ import {
   assertValidIanaTimeZone,
   DEFAULT_COMPANY_TIMEZONE,
 } from '../../../appointments/domain/services/timezone-utils.js';
+import { slugifyCompanyName } from '../slug.js';
 
 export interface CompanyProps {
   id: string; 
   companyName: string;
+  slug: string;
   name: string;
   phone: string;
   email: string;      
@@ -22,8 +24,9 @@ export interface CompanyProps {
 
 export type CreateCompanyProps = Omit<
   CompanyProps, 
-  'id' | 'isActive' | 'timezone' | 'createdAt' | 'updatedAt'
+  'id' | 'slug' | 'isActive' | 'timezone' | 'createdAt' | 'updatedAt'
 > & {
+  slug?: string | undefined;
   timezone?: string | undefined;
 };
 
@@ -37,12 +40,15 @@ export class CompanyEntity {
   
   static create(props: CreateCompanyProps): CompanyEntity {
     const now = new Date();
+    const id = crypto.randomUUID();
     const timezone = assertValidIanaTimeZone(
       props.timezone ?? DEFAULT_COMPANY_TIMEZONE,
     );
+    const slug = props.slug?.trim().toLowerCase() || slugifyCompanyName(props.companyName, id);
     return new CompanyEntity({
       ...props,
-      id: crypto.randomUUID(),
+      id,
+      slug,
       isActive: true,
       timezone,
       createdAt: now,
@@ -69,6 +75,7 @@ export class CompanyEntity {
 
   get id(): string { return this.props.id; }
   get companyName(): string { return this.props.companyName; }
+  get slug(): string { return this.props.slug; }
   get name(): string { return this.props.name; }
   get phone(): string { return this.props.phone; }
   get email(): string { return this.props.email; }

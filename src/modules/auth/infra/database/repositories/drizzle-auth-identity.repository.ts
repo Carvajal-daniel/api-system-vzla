@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../../../../shared/database/database.js";
 import { CollaboratorTable } from "../../../../Collaborators/infra/database/schema/collaborators-schema.js";
 import { CompanyTable } from "../../../../Company/infra/database/schema/companies-schema.js";
+import { slugifyCompanyName } from "../../../../Company/domain/slug.js";
 import { AuthEmailAlreadyInUseError } from "../../../domain/errors/auth-errors.js";
 import type {
   AuthCollaboratorRecord,
@@ -43,6 +44,7 @@ export class DrizzleAuthIdentityRepository implements AuthIdentityRepository {
       await db.insert(CompanyTable).values({
         id: record.id,
         companyName: record.companyName,
+        slug: slugifyCompanyName(record.companyName, record.id),
         name: record.name,
         phone: record.phone,
         email: record.email,

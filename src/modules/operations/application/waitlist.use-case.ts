@@ -72,6 +72,14 @@ export interface AddWaitlistEntryInput {
   preferredShift?: WaitlistShift | undefined;
 }
 
+export interface AddPublicWaitlistEntryInput {
+  companyId: string;
+  clientId: string;
+  collaboratorId?: string | null | undefined;
+  desiredDate: string;
+  preferredShift?: WaitlistShift | undefined;
+}
+
 export interface NotifyWaitlistForCanceledSlotInput {
   companyId: string;
   collaboratorId: string;
@@ -97,8 +105,23 @@ export class WaitlistUseCase {
       );
     }
 
+    return this.createValidatedEntry({
+      companyId: input.actor.companyId,
+      clientId: input.clientId,
+      collaboratorId: input.collaboratorId,
+      desiredDate: input.desiredDate,
+      preferredShift: input.preferredShift,
+    });
+  }
+
+  // Entrada pública na Fila de Espera Inteligente a partir do portal por slug (sem JWT de OWNER).
+  async addPublicEntry(input: AddPublicWaitlistEntryInput): Promise<WaitlistEntryRecord> {
+    return this.createValidatedEntry(input);
+  }
+
+  private async createValidatedEntry(input: AddPublicWaitlistEntryInput): Promise<WaitlistEntryRecord> {
     const clientExists = await this.repository.clientExistsInCompany(
-      input.actor.companyId,
+      input.companyId,
       input.clientId,
     );
     if (!clientExists) {
@@ -108,7 +131,7 @@ export class WaitlistUseCase {
     const collaboratorId = input.collaboratorId ?? null;
     if (collaboratorId) {
       const collaborator = await this.repository.collaboratorExistsInCompany(
-        input.actor.companyId,
+        input.companyId,
         collaboratorId,
       );
       if (!collaborator) {
@@ -121,7 +144,7 @@ export class WaitlistUseCase {
     }
 
     return this.repository.createEntry({
-      companyId: input.actor.companyId,
+      companyId: input.companyId,
       clientId: input.clientId,
       collaboratorId,
       desiredDate: input.desiredDate,

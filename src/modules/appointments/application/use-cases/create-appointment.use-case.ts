@@ -37,9 +37,9 @@ export class CreateAppointmentUseCase {
       startsAt: input.startsAt,
       clientName: input.clientName,
       clientPhone: input.clientPhone,
-      initialStatus: "PENDING",
+      initialStatus: input.initialStatus ?? "PENDING",
       publicBooking: true,
-      payFullPrice: true,
+      payFullPrice: input.payFullPrice ?? true,
       publicDetails: input.publicDetails,
       now: input.now ?? new Date(),
     });

@@ -55,7 +55,7 @@ describe.skipIf(!process.env.PHASE_2_TEST_DATABASE_URL)("Phase 2 on PostgreSQL",
     professionalId = randomUUID();
     headers = { authorization: "Bearer " + jwt.sign({ sub: companyId, companyId, role: "OWNER" }, jwtSecret) };
     await db.insert(CompanyTable).values({ id: companyId, name: "Owner", companyName: "Pagamento teste",
-      email: companyId + "@example.test", phone, password: "fixture", timezone: "UTC" });
+      slug: `pagamento-${companyId.slice(0, 8)}`, email: companyId + "@example.test", phone, password: "fixture", timezone: "UTC" });
     await db.insert(ClientTable).values({ id: clientId, companyId, name: "Cliente teste", phone, email: "payer@example.test" });
     await db.insert(ServiceTable).values({ id: serviceId, companyId, name: "Corte", priceInCents: 5000, durationMinutes: 30 });
     await db.insert(CollaboratorTable).values({ id: professionalId, companyId, name: "Profissional", specialty: "Corte",

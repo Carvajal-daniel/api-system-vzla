@@ -23,6 +23,7 @@ import { outflowRoutes } from "../../modules/finance/infra/http/routes/outflow.r
 import { inventoryRoutes } from "../../modules/inventory/infra/http/inventory.routes.js";
 import { intelligenceRoutes } from "../../modules/intelligence/infra/http/intelligence.routes.js";
 import { operationsRoutes } from "../../modules/operations/infra/http/operations.routes.js";
+import { publicPortalRoutes } from "../../modules/public-portal/infra/http/routes/public-portal.routes.js";
 import { servicesRoutes } from "../../modules/services/infra/http/routes/services.routes.js";
 import { whatsappRoutes } from "../../modules/whatsapp/infra/http/whatsapp.routes.js";
 import { workSchedulesRoutes } from "../../modules/work-schedules/infra/http/routes/work-schedules.routes.js";
@@ -116,5 +117,6 @@ app.register(whatsappRoutes);
 app.register(billingRoutes);
 app.register(intelligenceRoutes);
 app.register(operationsRoutes);
+app.register(publicPortalRoutes);
 
 export { app };

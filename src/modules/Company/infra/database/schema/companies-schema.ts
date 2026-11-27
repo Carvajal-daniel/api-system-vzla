@@ -12,6 +12,9 @@ export const CompanyTable = pgTable("companies", {
   
 
   companyName: text("company_name").notNull(),
+
+  // Identificador público amigável para URL da vitrine (/public/:slug)
+  slug: varchar("slug", { length: 120 }).notNull().unique(),
   
   // Nome do contato*
   name: text("name").notNull(),
