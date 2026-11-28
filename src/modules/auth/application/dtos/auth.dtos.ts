@@ -40,6 +40,7 @@ export interface OwnerProfileDTO {
   readonly phone: string;
   readonly avatarUrl: string | null;
   readonly isActive: boolean;
+  readonly isSuperAdmin?: boolean;
   readonly company: {
     readonly id: string;
     readonly companyName: string;

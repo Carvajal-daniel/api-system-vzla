@@ -1,4 +1,5 @@
 import type { ActorContext } from "../../../../shared/auth/actor-context.js";
+import { isSuperAdminEmail } from "../../../../shared/http/auth/authenticate.js";
 import { AuthenticatedActorNotFoundError } from "../../domain/errors/auth-errors.js";
 import type { AuthIdentityRepository } from "../../domain/repositories/auth-identity.repository.js";
 import type { AuthenticatedProfileDTO } from "../dtos/auth.dtos.js";
@@ -23,6 +24,7 @@ export class GetAuthenticatedProfileUseCase {
         phone: owner.phone,
         avatarUrl: owner.avatarUrl ?? null,
         isActive: owner.isActive,
+        isSuperAdmin: isSuperAdminEmail(owner.email),
         company: {
           id: owner.companyId,
           companyName: owner.companyName,

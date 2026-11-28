@@ -178,6 +178,7 @@ export const getMeOpenApiSchema = {
         specialty: { type: "string" },
         commissionPercentage: { type: "number" },
         isActive: { type: "boolean" },
+        isSuperAdmin: { type: "boolean" },
         company: {
           type: "object",
           properties: {

@@ -118,6 +118,48 @@ export async function authenticate(
   request.actor = actor;
 }
 
+export function isSuperAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return false;
+  const rawList = process.env.SUPER_ADMIN_EMAILS ?? "";
+  const allowed = rawList
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return allowed.includes(normalized);
+}
+
+// Restringe rotas da plataforma exclusivamente a proprietários autenticados cujo e-mail conste em SUPER_ADMIN_EMAILS.
+export async function authorizeSuperAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  if (!request.actor) {
+    return reply.status(401).send({
+      message: "Authentication required.",
+    });
+  }
+
+  if (request.actor.role !== "OWNER") {
+    return reply.status(403).send({
+      message: "Acesso restrito a administradores da plataforma.",
+    });
+  }
+
+  const [company] = await db
+    .select({ email: CompanyTable.email, isActive: CompanyTable.isActive })
+    .from(CompanyTable)
+    .where(eq(CompanyTable.id, request.actor.companyId))
+    .limit(1);
+
+  if (!company || !company.isActive || !isSuperAdminEmail(company.email)) {
+    return reply.status(403).send({
+      message: "Acesso restrito a administradores da plataforma.",
+    });
+  }
+}
+
 export function authorizeRoles(...allowedRoles: ActorRole[]) {
   return async function roleGuard(
     request: FastifyRequest,

@@ -6,6 +6,7 @@ import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
+import { adminRoutes } from "../../modules/admin/infra/http/admin.routes.js";
 import { appointmentsRoutes } from "../../modules/appointments/infra/http/routes/appointments.routes.js";
 import { clientRecoveryRoutes } from "../../modules/clients/infra/http/client-recovery.routes.js";
 import { clientsRoutes } from "../../modules/clients/infra/http/clients.routes.js";
@@ -118,5 +119,6 @@ app.register(billingRoutes);
 app.register(intelligenceRoutes);
 app.register(operationsRoutes);
 app.register(publicPortalRoutes);
+app.register(adminRoutes);
 
 export { app };

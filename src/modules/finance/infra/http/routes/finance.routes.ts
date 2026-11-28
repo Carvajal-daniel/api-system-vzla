@@ -3,6 +3,7 @@ import { listCommissionDeductions } from "../../database/repositories/commission
 import { readOutflowSummary } from "../../database/repositories/outflow-projections.js";
 import { productCashTotals } from "../../../../inventory/infra/database/inventory-projections.js";
 import { readCollectionTotals } from "../../database/repositories/collection-totals.js";
+import { readExecutiveDashboard } from "../../database/repositories/executive-dashboard.repository.js";
 import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -372,6 +373,42 @@ export async function financeRoutes(app: FastifyInstance): Promise<void> {
         byService: [...services.values()].sort((a, b) => b.realizedInCents - a.realizedInCents),
         appointments: details,
       });
+    },
+  );
+
+  app.get(
+    "/finance/executive-dashboard",
+    {
+      preHandler: [authenticate, authorizeRoles("OWNER")],
+      schema: {
+        tags: ["Finance (Owner)"],
+        summary: "KPIs executivos da barbearia: receita avulsa vs. MRR Clube VIP, conversão de sinais, comparecimento, renovações em 7 dias e rankings",
+        security: [{ bearerAuth: [] }],
+        querystring: {
+          type: "object",
+          properties: {
+            from: { type: "string", description: "Data inicial (YYYY-MM-DD)" },
+            to: { type: "string", description: "Data final (YYYY-MM-DD)" },
+          },
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          401: { type: "object", properties: { message: { type: "string" } } },
+          403: { type: "object", properties: { message: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { from, to } = financeQuerySchema.parse(request.query ?? {});
+      if (from && to && from > to) {
+        throw new InvalidLocalDateError("A data inicial deve ser anterior ou igual à data final.");
+      }
+      const data = await readExecutiveDashboard({
+        companyId: request.actor!.companyId,
+        from,
+        to,
+      });
+      return reply.status(200).send(data);
     },
   );
 }
