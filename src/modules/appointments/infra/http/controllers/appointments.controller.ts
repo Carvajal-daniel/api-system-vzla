@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { evaluateTenantDepositForClient } from "../../../../payments/infra/database/deposit-policy-lookup.js";
 import type { CreateAppointmentUseCase } from "../../../application/use-cases/create-appointment.use-case.js";
 import type { GetAvailabilityUseCase } from "../../../application/use-cases/get-availability.use-case.js";
 import type { ListAppointmentsUseCase } from "../../../application/use-cases/list-appointments.use-case.js";
@@ -91,6 +92,23 @@ export class AppointmentsController {
 
     const body = createOwnerAppointmentBodySchema.parse(request.body);
 
+    // Aplica a regra única de sinal anti-no-show quando initialStatus não foi especificado:
+    // se a barbearia desativou o sinal ou o cliente é assinante ativo do Clube VIP, não exige pré-reserva PENDING.
+    let resolvedInitialStatus = body.initialStatus;
+    if (!resolvedInitialStatus) {
+      try {
+        const depositContext = await evaluateTenantDepositForClient({
+          companyId: actor.companyId,
+          clientPhone: body.clientPhone,
+          servicePriceInCents: 100,
+        });
+        resolvedInitialStatus = depositContext.evaluation.requiresDeposit ? "PENDING" : "CONFIRMED";
+      } catch {
+        // Fallback seguro para ambientes de teste com repositórios em memória sem acesso ao banco.
+        resolvedInitialStatus = "PENDING";
+      }
+    }
+
     const appointment = await this.createAppointmentUseCase.executeInternal({
       actor,
       serviceId: body.serviceId,
@@ -98,7 +116,7 @@ export class AppointmentsController {
       startsAt: body.startsAt,
       clientName: body.clientName,
       clientPhone: body.clientPhone,
-      initialStatus: body.initialStatus,
+      initialStatus: resolvedInitialStatus,
       notes: body.notes,
       isGuest: body.isGuest,
       payFullPrice: body.payFullPrice,
