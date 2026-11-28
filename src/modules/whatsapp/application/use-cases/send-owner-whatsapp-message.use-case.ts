@@ -6,17 +6,19 @@ import {
 import { WhatsAppConversationNotFoundError } from "../../domain/errors/whatsapp-errors.js";
 import type { WhatsAppConversationsRepository } from "../../domain/repositories/whatsapp-conversations.repository.js";
 import type { WhatsAppMessagesRepository } from "../../domain/repositories/whatsapp-messages.repository.js";
+import type { WhatsAppGatewayPort } from "../ports/whatsapp-gateway.port.js";
 import type { AnalyzeWhatsAppConversationUseCase } from "./analyze-whatsapp-conversation.use-case.js";
 import type { ConversationalDispatchPort } from "./process-inbound-whatsapp-message.use-case.js";
 
 // Envia mensagem manual pelo proprietário (OWNER), assume automaticamente o atendimento (HUMAN)
-// e dispara pelo WhatsAppGatewayRouter no canal conversacional 1-a-1.
+// e dispara diretamente pela Evolution API conectada ao tenant (sem fallback silencioso em produção).
 export class SendOwnerWhatsAppMessageUseCase {
   constructor(
     private readonly conversationsRepository: WhatsAppConversationsRepository,
     private readonly messagesRepository: WhatsAppMessagesRepository,
     private readonly gatewayRouter: ConversationalDispatchPort,
     private readonly analyzeConversationUseCase?: AnalyzeWhatsAppConversationUseCase,
+    private readonly evolutionGateway?: Pick<WhatsAppGatewayPort, "sendText">,
   ) {}
 
   async execute(input: {
@@ -39,12 +41,26 @@ export class SendOwnerWhatsAppMessageUseCase {
     const trimmedContent = input.content.trim();
     const sentAt = new Date();
 
-    const dispatch = await this.gatewayRouter.send({
-      purpose: "CONVERSATIONAL_REPLY",
-      companyId: input.companyId,
-      phone: conversation.phone,
-      text: trimmedContent,
-    });
+    // Em produção, envia diretamente pelo adaptador real da Evolution API antes de persistir a mensagem.
+    const dispatch = this.evolutionGateway
+      ? await (async () => {
+          const result = await this.evolutionGateway!.sendText({
+            tenantId: input.companyId,
+            to: conversation.phone,
+            text: trimmedContent,
+            purpose: "RECEPTION",
+          });
+          return {
+            provider: "EVOLUTION" as const,
+            referenceId: result.externalMessageId ?? null,
+          };
+        })()
+      : await this.gatewayRouter.send({
+          purpose: "CONVERSATIONAL_REPLY",
+          companyId: input.companyId,
+          phone: conversation.phone,
+          text: trimmedContent,
+        });
 
     const outboundMessage = WhatsAppMessage.create({
       companyId: input.companyId,

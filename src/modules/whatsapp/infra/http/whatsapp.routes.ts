@@ -284,6 +284,7 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     messagesRepository,
     gatewayRouter,
     analyzeConversationUseCase,
+    hybridEvolutionAdapter,
   );
   const updateConversationModeUseCase =
     new UpdateWhatsAppConversationModeUseCase(conversationsRepository);

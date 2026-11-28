@@ -30,3 +30,11 @@ export class WhatsAppConversationNotFoundError extends DomainError {
     super(message, "NOT_FOUND", "WHATSAPP_CONVERSATION_NOT_FOUND");
   }
 }
+
+export class InvalidWhatsAppPhoneError extends DomainError {
+  constructor(
+    message = "Número de telefone do cliente inválido para envio no WhatsApp.",
+  ) {
+    super(message, "VALIDATION", "INVALID_WHATSAPP_PHONE");
+  }
+}

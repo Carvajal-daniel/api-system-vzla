@@ -10,7 +10,10 @@ import type {
   SendTextParams,
   WhatsAppGatewayPort,
 } from "../../../application/ports/whatsapp-gateway.port.js";
-import { WhatsAppChannelUnavailableError } from "../../../domain/errors/whatsapp-errors.js";
+import {
+  InvalidWhatsAppPhoneError,
+  WhatsAppChannelUnavailableError,
+} from "../../../domain/errors/whatsapp-errors.js";
 import type {
   TenantWhatsAppChannelStatus,
   TenantWhatsAppChannelsRepository,
@@ -139,7 +142,9 @@ export function formatEvolutionPhoneNumber(phone: string): string {
   const digits = withoutJidSuffix.replace(/\D/g, "");
 
   if (digits.length < 10) {
-    throw new Error(`Invalid WhatsApp destination phone: "${phone}"`);
+    throw new InvalidWhatsAppPhoneError(
+      `Número de telefone inválido para envio no WhatsApp: "${phone}".`,
+    );
   }
 
   // Números brasileiros informados sem DDI (10 ou 11 dígitos) recebem prefixo '55'.
@@ -261,7 +266,11 @@ export class EvolutionWhatsAppAdapter implements WhatsAppGatewayPort {
     };
   }
 
-  private async resolveTenantInstanceName(tenantId: string): Promise<string> {
+  private async resolveTenantChannelConfig(tenantId: string): Promise<{
+    instanceName: string;
+    apiUrl: string;
+    apiKey: string;
+  }> {
     const channel = await this.channelsRepository.findByTenantAndProvider(
       tenantId,
       "EVOLUTION",
@@ -271,13 +280,38 @@ export class EvolutionWhatsAppAdapter implements WhatsAppGatewayPort {
         ? channel.credentials["instanceName"].trim()
         : "";
 
-    if (!instanceName) {
+    if (!channel || !instanceName) {
       throw new WhatsAppChannelUnavailableError(
-        "Canal Evolution não configurado para este tenant.",
+        "Nenhuma instância WhatsApp configurada para esta empresa. Conecte o WhatsApp antes de enviar mensagens.",
       );
     }
 
-    return instanceName;
+    if (channel.status !== "CONNECTED") {
+      throw new WhatsAppChannelUnavailableError(
+        "A instância do WhatsApp está desconectada. Reconecte o WhatsApp para enviar mensagens.",
+      );
+    }
+
+    const env = this.envProvider();
+    const channelApiUrl =
+      typeof channel.credentials["apiUrl"] === "string"
+        ? channel.credentials["apiUrl"].trim().replace(/\/+$/, "")
+        : "";
+    const channelApiKey =
+      typeof channel.credentials["apiKey"] === "string"
+        ? channel.credentials["apiKey"].trim()
+        : "";
+
+    const apiUrl = channelApiUrl || env.apiUrl || "";
+    const apiKey = channelApiKey || env.apiKey || "";
+
+    if (!apiUrl || !apiKey) {
+      throw new EvolutionApiConfigError(
+        "Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY).",
+      );
+    }
+
+    return { instanceName, apiUrl, apiKey };
   }
 
   private async request(
@@ -317,12 +351,12 @@ export class EvolutionWhatsAppAdapter implements WhatsAppGatewayPort {
   }
 
   public async sendText(params: SendTextParams): Promise<SendMessageResult> {
-    const config = this.requireEvolutionConfig();
-    const instanceName = await this.resolveTenantInstanceName(params.tenantId);
+    const { instanceName, apiUrl, apiKey } =
+      await this.resolveTenantChannelConfig(params.tenantId);
     const number = formatEvolutionPhoneNumber(params.to);
 
     const response = await this.request(
-      config,
+      { apiUrl, apiKey },
       `/message/sendText/${encodeURIComponent(instanceName)}`,
       "POST",
       {
@@ -333,8 +367,11 @@ export class EvolutionWhatsAppAdapter implements WhatsAppGatewayPort {
     );
 
     if (!response.ok) {
-      throw new WhatsAppChannelUnavailableError(
-        `Falha ao enviar mensagem de texto na Evolution API (HTTP ${response.status}).`,
+      const detail = await this.safeReadResponseText(response);
+      throw new EvolutionApiHttpError(
+        response.status,
+        `Não foi possível enviar a mensagem via Evolution API (HTTP ${response.status}). Verifique se a instância está conectada e o número é válido.`,
+        detail,
       );
     }
 
@@ -348,12 +385,12 @@ export class EvolutionWhatsAppAdapter implements WhatsAppGatewayPort {
   }
 
   public async sendPresence(params: SendPresenceParams): Promise<void> {
-    const config = this.requireEvolutionConfig();
-    const instanceName = await this.resolveTenantInstanceName(params.tenantId);
+    const { instanceName, apiUrl, apiKey } =
+      await this.resolveTenantChannelConfig(params.tenantId);
     const number = formatEvolutionPhoneNumber(params.to);
 
     const response = await this.request(
-      config,
+      { apiUrl, apiKey },
       `/chat/sendPresence/${encodeURIComponent(instanceName)}`,
       "POST",
       {
