@@ -617,6 +617,9 @@ export class DrizzleAiBookingContextProvider
       habitualWeekday: historySummary.habitualWeekday,
       activePackagesOrTags,
       todayAppointments,
+      upcomingAppointments: upcomingResult.appointments.filter(
+        (appt) => Date.parse(appt.startsAt) >= params.now.getTime(),
+      ),
     };
   }
 
@@ -667,10 +670,7 @@ export class DrizzleAiBookingContextProvider
           eq(AppointmentTable.companyId, input.companyId),
           inArray(AppointmentTable.status, ["PENDING", "CONFIRMED"]),
           gte(AppointmentTable.startsAt, referenceNow),
-          eq(
-            sql`regexp_replace(${AppointmentTable.clientPhone}, '[^0-9]', '', 'g')`,
-            phone,
-          ),
+          sql`RIGHT(regexp_replace(${AppointmentTable.clientPhone}, '[^0-9]', '', 'g'), 10) = RIGHT(${phone}, 10)`,
         ),
       )
       .orderBy(asc(AppointmentTable.startsAt));
@@ -921,6 +921,41 @@ export class DrizzleAiBookingContextProvider
           sanitizeCustomerName(clientName) ??
           resolvedCustomerName ??
           `Cliente ${clientPhone.replace(/\D/g, "").slice(-4) || "WhatsApp"}`;
+
+        // Guarda anti-duplicidade: se o cliente já possui um agendamento futuro ativo no mesmo horário,
+        // evita tentativa de duplicação (ex.: cliente apenas confirmando "Sim, terça às 17").
+        if (!isGuest) {
+          const existingUpcoming = await this.listCustomerUpcomingAppointments({
+            companyId,
+            customerPhone: clientPhone,
+            timezone: companyRow.timezone,
+            now: new Date(),
+          });
+          const duplicate = existingUpcoming.appointments.find(
+            (appt) =>
+              appt.localDate === actualLocal.localDate &&
+              appt.localTime === actualLocal.localTime,
+          );
+          if (duplicate) {
+            return {
+              success: true,
+              id: duplicate.appointmentId,
+              startsAt: duplicate.startsAt,
+              endsAt: new Date(
+                Date.parse(duplicate.startsAt) +
+                  (catalog.services.find((s) => s.id === serviceId)?.durationMinutes ?? 30) * 60_000,
+              ).toISOString(),
+              localDate: duplicate.localDate,
+              localTime: duplicate.localTime,
+              status: duplicate.status,
+              serviceName: duplicate.serviceName,
+              collaboratorId: normalizedCollaboratorId,
+              requiresDeposit: false,
+              depositAmountCents: 0,
+              payment: null,
+            };
+          }
+        }
 
         // Consulta a regra única de sinal anti-no-show: assinantes ativos do Clube VIP são sempre isentos.
         const matchedService = catalog.services.find((s) => s.id === serviceId);

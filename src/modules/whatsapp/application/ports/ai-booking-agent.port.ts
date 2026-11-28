@@ -80,6 +80,7 @@ export interface AiBookingCustomerContext {
   habitualWeekday?: string | null;
   activePackagesOrTags?: string[];
   todayAppointments?: AiBookingCustomerAppointment[];
+  upcomingAppointments?: AiBookingCustomerAppointment[];
 }
 
 export interface AiBookingCompanyContext {
